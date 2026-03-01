@@ -12,8 +12,8 @@ go test ./... -v -count=1                                 # run tests
 
 # cross-compile and deploy to inuc1
 GOOS=linux GOARCH=amd64 go build -o lplex-linux-amd64 ./cmd/lplex
-scp lplex-linux-amd64 inuc1.local:/opt/dockwise-lplex/lplex.new
-ssh inuc1.local "mv /opt/dockwise-lplex/lplex.new /opt/dockwise-lplex/lplex && sudo systemctl restart dockwise-lplex"
+scp lplex-linux-amd64 inuc1.local:/usr/bin/lplex.new
+ssh inuc1.local "mv /usr/bin/lplex.new /usr/bin/lplex && sudo systemctl restart lplex"
 ```
 
 ## Release
@@ -25,8 +25,8 @@ git tag v0.1.0 && git push origin v0.1.0   # triggers goreleaser via GitHub Acti
 ## Deployment
 
 - **Host**: `inuc1.local` (Linux x86_64)
-- **Binary**: `/opt/dockwise-lplex/lplex`
-- **Service**: `dockwise-lplex.service` (systemd, runs as `theo`)
+- **Binary**: `/usr/bin/lplex` (installed via `.deb` or manual copy)
+- **Service**: `lplex.service` (systemd, runs as `theo`)
 - **CAN interface**: `can0` (service binds to `sys-subsystem-net-devices-can0.device`)
 - **HTTP port**: 8089
 
