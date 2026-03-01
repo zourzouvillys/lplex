@@ -14,7 +14,7 @@ func TestReadBlockIndexRejectsExcessiveCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	const count = maxBlockIndexEntries + 1
 	tableSize := int64(count) * 8
@@ -43,7 +43,7 @@ func TestReadBlockIndexRejectsExcessiveCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rf.Close()
+	defer func() { _ = rf.Close() }()
 
 	_, err = readBlockIndex(rf, fileSize)
 	if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
@@ -57,7 +57,7 @@ func TestInspectBlockRejectsOversizedCompressedLen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	block0Off := int64(FileHeaderSize)
 	block1Off := block0Off + int64(BlockHeaderLen) + 1
@@ -104,7 +104,7 @@ func TestInspectBlockRejectsOversizedCompressedLen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rf.Close()
+	defer func() { _ = rf.Close() }()
 
 	r, err := NewReader(rf)
 	if err != nil {
@@ -123,7 +123,7 @@ func TestInspectBlockRejectsOversizedDictLen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	block0Off := int64(FileHeaderSize)
 	block1Off := block0Off + int64(BlockHeaderLenDict) + 2
@@ -170,7 +170,7 @@ func TestInspectBlockRejectsOversizedDictLen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rf.Close()
+	defer func() { _ = rf.Close() }()
 
 	r, err := NewReader(rf)
 	if err != nil {
