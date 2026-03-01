@@ -39,18 +39,18 @@ builds:
 
 archives:
   - id: default
-    builds:
+    ids:
       - lplex
       - lplexdump
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 nfpms:
   - id: lplex-deb
     package_name: lplex
-    builds:
+    ids:
       - lplex
       - lplexdump
     vendor: Theo Zourzouvillys
@@ -69,29 +69,15 @@ nfpms:
     scripts:
       postinstall: packaging/postinstall.sh
 
-brews:
-  - ids:
-      - default
-    repository:
-      owner: sixfathoms
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    homepage: https://github.com/sixfathoms/lplex
-    description: CAN bus HTTP bridge for NMEA 2000
-    license: MIT
-    install: |
-      bin.install "lplex"
-      bin.install "lplexdump"
-
-dockers:
-  - ids:
-      - lplex
-    image_templates:
-      - "ghcr.io/sixfathoms/lplex:{{ .Version }}-amd64"
-      - "ghcr.io/sixfathoms/lplex:latest-amd64"
-    use: buildx
-    build_flag_templates:
-      - "--platform=linux/amd64"
+dockers_v2:
+  - images:
+      - "ghcr.io/sixfathoms/lplex"
+    tags:
+      - "{{ .Version }}"
+      - latest
+    platforms:
+      - linux/amd64
+      - linux/arm64
     dockerfile: Dockerfile
     extra_files:
       - go.mod
@@ -99,34 +85,6 @@ dockers:
       - cmd/
       - internal/
       - lplexc/
-
-  - ids:
-      - lplex
-    image_templates:
-      - "ghcr.io/sixfathoms/lplex:{{ .Version }}-arm64"
-      - "ghcr.io/sixfathoms/lplex:latest-arm64"
-    use: buildx
-    build_flag_templates:
-      - "--platform=linux/arm64"
-    goarch: arm64
-    dockerfile: Dockerfile
-    extra_files:
-      - go.mod
-      - go.sum
-      - cmd/
-      - internal/
-      - lplexc/
-
-docker_manifests:
-  - name_template: "ghcr.io/sixfathoms/lplex:{{ .Version }}"
-    image_templates:
-      - "ghcr.io/sixfathoms/lplex:{{ .Version }}-amd64"
-      - "ghcr.io/sixfathoms/lplex:{{ .Version }}-arm64"
-
-  - name_template: "ghcr.io/sixfathoms/lplex:latest"
-    image_templates:
-      - "ghcr.io/sixfathoms/lplex:latest-amd64"
-      - "ghcr.io/sixfathoms/lplex:latest-arm64"
 
 changelog:
   sort: asc

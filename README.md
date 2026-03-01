@@ -11,12 +11,6 @@ go install github.com/sixfathoms/lplex/cmd/lplex@latest
 go install github.com/sixfathoms/lplex/cmd/lplexdump@latest
 ```
 
-### Homebrew
-
-```bash
-brew install sixfathoms/tap/lplex
-```
-
 ### Docker
 
 ```bash
