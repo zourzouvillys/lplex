@@ -19,12 +19,19 @@ const (
 var (
 	Magic           = [3]byte{'L', 'P', 'J'}
 	Version         = byte(0x01)
+	Version2        = byte(0x02)
 	CRC32cTable     = crc32.MakeTable(crc32.Castagnoli)
 	FileHeaderSize  = 16
 	BlockTrailerLen = 10 // DeviceTableSize(2) + FrameCount(4) + Checksum(4)
 	BlockIndexMagic = [4]byte{'L', 'P', 'J', 'I'}
-	BlockHeaderLen     = 12 // BaseTime(8) + CompressedLen(4), for zstd blocks
-	BlockHeaderLenDict = 16 // BaseTime(8) + DictLen(4) + CompressedLen(4), for zstd+dict blocks
+
+	// v1 compressed block headers
+	BlockHeaderLen     = 12 // BaseTime(8) + CompressedLen(4)
+	BlockHeaderLenDict = 16 // BaseTime(8) + DictLen(4) + CompressedLen(4)
+
+	// Block data offsets within uncompressed blocks
+	BlockDataOffsetV1 = 8  // frame data starts after BaseTime
+	BlockDataOffsetV2 = 16 // frame data starts after BaseTime + BaseSeq
 )
 
 // DeviceEntryMaxSize is the worst-case size of a single device table entry:

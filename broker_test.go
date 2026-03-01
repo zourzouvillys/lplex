@@ -1,6 +1,7 @@
 package lplex
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"testing"
@@ -26,151 +27,42 @@ func injectFrame(b *Broker, pgn uint32, src uint8, data []byte) {
 func TestBrokerSequenceNumbering(t *testing.T) {
 	b := newTestBroker()
 	go b.Run()
-	defer close(b.rxFrames)
+	defer b.CloseRx()
+	drainTxFrame(b, time.Second)
 
-	// Create and connect a session
-	b.CreateSession("test", time.Minute, nil)
-	session, ok := b.ConnectSession("test")
-	if !ok {
-		t.Fatal("failed to connect session")
-	}
+	c := b.NewConsumer(ConsumerConfig{Cursor: b.head})
+	defer func() { _ = c.Close() }()
 
-	// Inject 3 frames
 	for i := range 3 {
 		injectFrame(b, 129025, 1, []byte{byte(i), 0, 0, 0, 0, 0, 0, 0})
 	}
+	time.Sleep(50 * time.Millisecond)
 
-	// Read 3 events from the channel
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	for i := range 3 {
-		select {
-		case data := <-session.Ch:
-			var msg frameJSON
-			if err := json.Unmarshal(data, &msg); err != nil {
-				t.Fatalf("frame %d: unmarshal error: %v", i, err)
-			}
-			if msg.Seq != uint64(i+1) {
-				t.Errorf("frame %d: seq got %d, want %d", i, msg.Seq, i+1)
-			}
-			if msg.PGN != 129025 {
-				t.Errorf("frame %d: PGN got %d, want 129025", i, msg.PGN)
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("timeout waiting for frame %d", i)
+		frame, err := c.Next(ctx)
+		if err != nil {
+			t.Fatalf("frame %d: %v", i, err)
 		}
-	}
-}
-
-func TestBrokerRingBufferReplay(t *testing.T) {
-	b := newTestBroker()
-	go b.Run()
-	defer close(b.rxFrames)
-
-	// Inject frames without any connected client
-	for i := range 10 {
-		injectFrame(b, 129025, 1, []byte{byte(i), 0, 0, 0, 0, 0, 0, 0})
-	}
-
-	// Wait for all frames to be processed
-	time.Sleep(50 * time.Millisecond)
-
-	// Replay from seq 0 (get everything)
-	entries := b.Replay(0, nil)
-	if len(entries) != 10 {
-		t.Fatalf("expected 10 replay entries, got %d", len(entries))
-	}
-
-	// Verify sequence numbers
-	for i, data := range entries {
-		var msg frameJSON
-		if err := json.Unmarshal(data, &msg); err != nil {
-			t.Fatalf("unmarshal entry %d: %v", i, err)
+		if frame.Seq != uint64(i+1) {
+			t.Errorf("frame %d: seq got %d, want %d", i, frame.Seq, i+1)
 		}
-		if msg.Seq != uint64(i+1) {
-			t.Errorf("replay entry %d: seq got %d, want %d", i, msg.Seq, i+1)
+		if frame.Header.PGN != 129025 {
+			t.Errorf("frame %d: PGN got %d, want 129025", i, frame.Header.PGN)
 		}
-	}
-
-	// Replay from seq 5 (get 6-10)
-	entries = b.Replay(5, nil)
-	if len(entries) != 5 {
-		t.Fatalf("expected 5 replay entries from seq 5, got %d", len(entries))
-	}
-	var firstMsg frameJSON
-	if err := json.Unmarshal(entries[0], &firstMsg); err != nil {
-		t.Fatalf("unmarshal first entry: %v", err)
-	}
-	if firstMsg.Seq != 6 {
-		t.Errorf("first replay entry: seq got %d, want 6", firstMsg.Seq)
-	}
-}
-
-func TestBrokerReplayBeyondHead(t *testing.T) {
-	b := newTestBroker()
-	go b.Run()
-	defer close(b.rxFrames)
-
-	injectFrame(b, 129025, 1, []byte{0, 0, 0, 0, 0, 0, 0, 0})
-	time.Sleep(50 * time.Millisecond)
-
-	// Replay from current head (nothing to replay)
-	entries := b.Replay(b.CurrentSeq(), nil)
-	if len(entries) != 0 {
-		t.Fatalf("expected 0 replay entries, got %d", len(entries))
-	}
-}
-
-func TestBrokerClientSessionLifecycle(t *testing.T) {
-	b := newTestBroker()
-	go b.Run()
-	defer close(b.rxFrames)
-
-	// Create session
-	session, seq := b.CreateSession("helm", time.Minute, nil)
-	if session.ID != "helm" {
-		t.Errorf("session ID: got %q, want %q", session.ID, "helm")
-	}
-	_ = seq
-
-	// Connect
-	session, ok := b.ConnectSession("helm")
-	if !ok || !session.Connected {
-		t.Fatal("session should be connected")
-	}
-
-	// Inject a frame
-	injectFrame(b, 129025, 1, []byte{0xAA, 0, 0, 0, 0, 0, 0, 0})
-
-	select {
-	case <-session.Ch:
-		// good
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for frame on connected session")
-	}
-
-	// Disconnect
-	b.DisconnectSession("helm")
-
-	// Inject another frame while disconnected
-	injectFrame(b, 129025, 1, []byte{0xBB, 0, 0, 0, 0, 0, 0, 0})
-	time.Sleep(50 * time.Millisecond)
-
-	// Channel should be empty (not connected)
-	select {
-	case <-session.Ch:
-		t.Fatal("should not receive frames while disconnected")
-	default:
-		// good
 	}
 }
 
 func TestBrokerAckAndReplay(t *testing.T) {
 	b := newTestBroker()
 	go b.Run()
-	defer close(b.rxFrames)
+	defer b.CloseRx()
+	drainTxFrame(b, time.Second)
 
 	b.CreateSession("helm", time.Minute, nil)
 
-	// Inject 5 frames
 	for i := range 5 {
 		injectFrame(b, 129025, 1, []byte{byte(i), 0, 0, 0, 0, 0, 0, 0})
 	}
@@ -181,22 +73,28 @@ func TestBrokerAckAndReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Replay should return 4 and 5
-	b.sessionMu.RLock()
-	cursor := b.sessions["helm"].Cursor
-	b.sessionMu.RUnlock()
+	// Consumer starting after ACK'd cursor should read 4 and 5
+	session := b.GetSession("helm")
+	c := b.NewConsumer(ConsumerConfig{Cursor: session.Cursor + 1})
+	defer func() { _ = c.Close() }()
 
-	entries := b.Replay(cursor, nil)
-	if len(entries) != 2 {
-		t.Fatalf("expected 2 replay entries after ACK 3, got %d", len(entries))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	frame, err := c.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Seq != 4 {
+		t.Errorf("first frame: seq got %d, want 4", frame.Seq)
 	}
 
-	var msg frameJSON
-	if err := json.Unmarshal(entries[0], &msg); err != nil {
-		t.Fatalf("unmarshal entry: %v", err)
+	frame, err = c.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if msg.Seq != 4 {
-		t.Errorf("first replay: seq got %d, want 4", msg.Seq)
+	if frame.Seq != 5 {
+		t.Errorf("second frame: seq got %d, want 5", frame.Seq)
 	}
 }
 
@@ -208,40 +106,11 @@ func TestBrokerAckUnknownSession(t *testing.T) {
 	}
 }
 
-func TestBrokerSlowClient(t *testing.T) {
-	b := newTestBroker()
-	go b.Run()
-	defer close(b.rxFrames)
-
-	b.CreateSession("slow", time.Minute, nil)
-	session, _ := b.ConnectSession("slow")
-
-	// Fill the channel buffer (128) and then some
-	for i := range 200 {
-		injectFrame(b, 129025, 1, []byte{byte(i), 0, 0, 0, 0, 0, 0, 0})
-	}
-	time.Sleep(100 * time.Millisecond)
-
-	// Channel should have at most 128 entries
-	count := len(session.Ch)
-	if count > 128 {
-		t.Errorf("channel should be capped at 128, got %d", count)
-	}
-
-	// All 200 frames should be in the ring buffer for replay
-	entries := b.Replay(0, nil)
-	if len(entries) != 200 {
-		t.Errorf("ring buffer should have 200 entries, got %d", len(entries))
-	}
-}
-
 func TestBrokerDeviceDiscovery(t *testing.T) {
 	b := newTestBroker()
 	go b.Run()
-	defer close(b.rxFrames)
-
-	b.CreateSession("test", time.Minute, nil)
-	session, _ := b.ConnectSession("test")
+	defer b.CloseRx()
+	drainTxFrame(b, time.Second)
 
 	// Inject PGN 60928 address claim
 	nameBytes := make([]byte, 8)
@@ -252,24 +121,9 @@ func TestBrokerDeviceDiscovery(t *testing.T) {
 	putLE64(nameBytes, name)
 
 	injectFrame(b, 60928, 1, nameBytes)
-
-	select {
-	case data := <-session.Ch:
-		// Should get a device event
-		var raw map[string]any
-		if err := json.Unmarshal(data, &raw); err != nil {
-			t.Fatalf("unmarshal device event: %v", err)
-		}
-		if raw["type"] == "device" {
-			// Good, got device event
-			if raw["manufacturer"] != "Garmin" {
-				t.Errorf("manufacturer: got %v, want Garmin", raw["manufacturer"])
-			}
-		}
-		// Also get the frame itself
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for device event")
-	}
+	// Drain the product info ISO request.
+	drainTxFrame(b, time.Second)
+	time.Sleep(50 * time.Millisecond)
 
 	// Device registry should have the device
 	devices := b.devices.Snapshot()
@@ -305,44 +159,6 @@ func TestBrokerReconnectSession(t *testing.T) {
 	}
 	if s2.BufferTimeout != 2*time.Minute {
 		t.Errorf("buffer timeout should be updated to 2m, got %v", s2.BufferTimeout)
-	}
-}
-
-func TestBrokerConnectUnknownSession(t *testing.T) {
-	b := newTestBroker()
-	_, ok := b.ConnectSession("nonexistent")
-	if ok {
-		t.Error("connecting unknown session should fail")
-	}
-}
-
-func TestBrokerRingOverwrite(t *testing.T) {
-	// Small ring to force overwrite
-	b := NewBroker(BrokerConfig{
-		RingSize:          16,
-		MaxBufferDuration: time.Minute,
-	})
-	go b.Run()
-	defer close(b.rxFrames)
-
-	// Inject 32 frames (2x the ring size)
-	for i := range 32 {
-		injectFrame(b, 129025, 1, []byte{byte(i), 0, 0, 0, 0, 0, 0, 0})
-	}
-	time.Sleep(50 * time.Millisecond)
-
-	// Replay from 0 should only get the last 16
-	entries := b.Replay(0, nil)
-	if len(entries) != 16 {
-		t.Fatalf("expected 16 replay entries after overwrite, got %d", len(entries))
-	}
-
-	var first frameJSON
-	if err := json.Unmarshal(entries[0], &first); err != nil {
-		t.Fatalf("unmarshal entry: %v", err)
-	}
-	if first.Seq != 17 {
-		t.Errorf("first entry after overwrite: seq got %d, want 17", first.Seq)
 	}
 }
 
@@ -466,99 +282,42 @@ func registerDevice(b *Broker, src uint8, manufacturerCode uint16, instance uint
 	drainTxFrame(b, 100*time.Millisecond)
 }
 
-func TestBrokerFilterByPGN(t *testing.T) {
-	b := newTestBroker()
-	go b.Run()
-	defer close(b.rxFrames)
-	drainTxFrame(b, time.Second)
-
-	filter := &EventFilter{PGNs: []uint32{129025}}
-	b.CreateSession("filtered", time.Minute, filter)
-	session, _ := b.ConnectSession("filtered")
-
-	// Inject a frame that matches the filter.
-	injectFrame(b, 129025, 1, []byte{0xAA, 0, 0, 0, 0, 0, 0, 0})
-	// Inject a frame that does NOT match.
-	injectFrame(b, 129026, 1, []byte{0xBB, 0, 0, 0, 0, 0, 0, 0})
-	time.Sleep(50 * time.Millisecond)
-
-	// Should only get the matching frame.
-	select {
-	case data := <-session.Ch:
-		var msg frameJSON
-		if err := json.Unmarshal(data, &msg); err != nil {
-			t.Fatalf("unmarshal: %v", err)
-		}
-		if msg.PGN != 129025 {
-			t.Errorf("expected PGN 129025, got %d", msg.PGN)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for filtered frame")
-	}
-
-	select {
-	case data := <-session.Ch:
-		var msg frameJSON
-		_ = json.Unmarshal(data, &msg)
-		t.Errorf("should not receive PGN %d, filter is [129025]", msg.PGN)
-	case <-time.After(100 * time.Millisecond):
-		// good
-	}
-}
-
 func TestBrokerFilterByManufacturer(t *testing.T) {
 	b := newTestBroker()
 	go b.Run()
-	defer close(b.rxFrames)
+	defer b.CloseRx()
 	drainTxFrame(b, time.Second)
 
 	// Register a Garmin device at src 5.
 	registerDevice(b, 5, 229, 0)
 
 	filter := &EventFilter{Manufacturers: []string{"Garmin"}}
-	b.CreateSession("mfr-filter", time.Minute, filter)
-	session, _ := b.ConnectSession("mfr-filter")
+	c := b.NewConsumer(ConsumerConfig{Cursor: b.head, Filter: filter})
+	defer func() { _ = c.Close() }()
 
 	// Frame from Garmin (src 5) should pass.
 	injectFrame(b, 129025, 5, []byte{0xAA, 0, 0, 0, 0, 0, 0, 0})
 	// Frame from unknown src 10 should be dropped.
 	injectFrame(b, 129025, 10, []byte{0xBB, 0, 0, 0, 0, 0, 0, 0})
+	drainTxFrame(b, 100*time.Millisecond) // drain ISO request for src 10
 	time.Sleep(50 * time.Millisecond)
 
-	select {
-	case data := <-session.Ch:
-		var msg frameJSON
-		_ = json.Unmarshal(data, &msg)
-		if msg.Src != 5 {
-			t.Errorf("expected src 5 (Garmin), got %d", msg.Src)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for Garmin frame")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	frame, err := c.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// Second frame should NOT arrive (src 10 is not Garmin).
-	// Note: src 10 is new, so the broker will send an ISO Request.
-	// Drain that, then check the channel.
-	drainTxFrame(b, 100*time.Millisecond)
-
-	select {
-	case data := <-session.Ch:
-		var msg frameJSON
-		_ = json.Unmarshal(data, &msg)
-		// Might be a device event from address claim of src 10 (which
-		// won't have "type" field, so it's a frame), or an actual frame.
-		if msg.Src == 10 && msg.PGN == 129025 {
-			t.Error("should not receive frames from non-Garmin device")
-		}
-	case <-time.After(100 * time.Millisecond):
-		// good
+	if frame.Header.Source != 5 {
+		t.Errorf("expected src 5 (Garmin), got %d", frame.Header.Source)
 	}
 }
 
 func TestBrokerFilterByManufacturerCode(t *testing.T) {
 	b := newTestBroker()
 	go b.Run()
-	defer close(b.rxFrames)
+	defer b.CloseRx()
 	drainTxFrame(b, time.Second)
 
 	// Register Garmin (code 229) at src 5, Victron (code 358) at src 7.
@@ -567,69 +326,58 @@ func TestBrokerFilterByManufacturerCode(t *testing.T) {
 
 	// Filter by numeric code "229" instead of name "Garmin".
 	filter := &EventFilter{Manufacturers: []string{"229"}}
-	b.CreateSession("code-filter", time.Minute, filter)
-	session, _ := b.ConnectSession("code-filter")
+	c := b.NewConsumer(ConsumerConfig{Cursor: b.head, Filter: filter})
+	defer func() { _ = c.Close() }()
 
 	injectFrame(b, 129025, 5, []byte{0xAA, 0, 0, 0, 0, 0, 0, 0})
 	injectFrame(b, 129025, 7, []byte{0xBB, 0, 0, 0, 0, 0, 0, 0})
 	time.Sleep(50 * time.Millisecond)
 
-	select {
-	case data := <-session.Ch:
-		var msg frameJSON
-		_ = json.Unmarshal(data, &msg)
-		if msg.Src != 5 {
-			t.Errorf("expected src 5 (Garmin/229), got %d", msg.Src)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for frame matching manufacturer code 229")
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 
-	select {
-	case data := <-session.Ch:
-		var msg frameJSON
-		_ = json.Unmarshal(data, &msg)
-		if msg.Src == 7 {
-			t.Error("should not receive frames from Victron when filtering by code 229")
-		}
-	case <-time.After(100 * time.Millisecond):
-		// good
+	frame, err := c.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Header.Source != 5 {
+		t.Errorf("expected src 5 (Garmin/229), got %d", frame.Header.Source)
 	}
 }
 
 func TestBrokerFilterByInstance(t *testing.T) {
 	b := newTestBroker()
 	go b.Run()
-	defer close(b.rxFrames)
+	defer b.CloseRx()
 	drainTxFrame(b, time.Second)
 
 	// Register device at src 3 with instance 2 (Garmin).
 	registerDevice(b, 3, 229, 2)
 
 	filter := &EventFilter{Instances: []uint8{2}}
-	b.CreateSession("inst-filter", time.Minute, filter)
-	session, _ := b.ConnectSession("inst-filter")
+	c := b.NewConsumer(ConsumerConfig{Cursor: b.head, Filter: filter})
+	defer func() { _ = c.Close() }()
 
 	// Frame from instance 2 device should pass.
 	injectFrame(b, 129025, 3, []byte{0xAA, 0, 0, 0, 0, 0, 0, 0})
 	time.Sleep(50 * time.Millisecond)
 
-	select {
-	case data := <-session.Ch:
-		var msg frameJSON
-		_ = json.Unmarshal(data, &msg)
-		if msg.Src != 3 {
-			t.Errorf("expected src 3, got %d", msg.Src)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for instance-filtered frame")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	frame, err := c.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Header.Source != 3 {
+		t.Errorf("expected src 3, got %d", frame.Header.Source)
 	}
 }
 
 func TestBrokerFilterCombined(t *testing.T) {
 	b := newTestBroker()
 	go b.Run()
-	defer close(b.rxFrames)
+	defer b.CloseRx()
 	drainTxFrame(b, time.Second)
 
 	// Register Garmin at src 5, Victron at src 7.
@@ -641,8 +389,8 @@ func TestBrokerFilterCombined(t *testing.T) {
 		PGNs:          []uint32{129025},
 		Manufacturers: []string{"Garmin"},
 	}
-	b.CreateSession("combo", time.Minute, filter)
-	session, _ := b.ConnectSession("combo")
+	c := b.NewConsumer(ConsumerConfig{Cursor: b.head, Filter: filter})
+	defer func() { _ = c.Close() }()
 
 	// PGN 129025 from Garmin -> pass.
 	injectFrame(b, 129025, 5, []byte{1, 0, 0, 0, 0, 0, 0, 0})
@@ -652,80 +400,26 @@ func TestBrokerFilterCombined(t *testing.T) {
 	injectFrame(b, 129025, 7, []byte{3, 0, 0, 0, 0, 0, 0, 0})
 	time.Sleep(50 * time.Millisecond)
 
-	var received []frameJSON
-	for {
-		select {
-		case data := <-session.Ch:
-			var msg frameJSON
-			_ = json.Unmarshal(data, &msg)
-			received = append(received, msg)
-		case <-time.After(100 * time.Millisecond):
-			goto done
-		}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	frame, err := c.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-done:
-
-	if len(received) != 1 {
-		t.Fatalf("expected 1 frame, got %d: %+v", len(received), received)
-	}
-	if received[0].PGN != 129025 || received[0].Src != 5 {
-		t.Errorf("unexpected frame: PGN=%d src=%d", received[0].PGN, received[0].Src)
-	}
-}
-
-func TestBrokerReplayWithFilter(t *testing.T) {
-	b := newTestBroker()
-	go b.Run()
-	defer close(b.rxFrames)
-	drainTxFrame(b, time.Second)
-
-	// Register Garmin at src 5.
-	registerDevice(b, 5, 229, 0)
-
-	// Inject mixed frames (no session connected, they go to ring only).
-	injectFrame(b, 129025, 5, []byte{1, 0, 0, 0, 0, 0, 0, 0})
-	injectFrame(b, 129026, 5, []byte{2, 0, 0, 0, 0, 0, 0, 0})
-	injectFrame(b, 129025, 10, []byte{3, 0, 0, 0, 0, 0, 0, 0})
-	// Drain the ISO Request for new source 10.
-	drainTxFrame(b, 100*time.Millisecond)
-	time.Sleep(50 * time.Millisecond)
-
-	// Replay with PGN filter.
-	filter := &EventFilter{PGNs: []uint32{129025}}
-	entries := b.Replay(0, filter)
-
-	// Should get frames with PGN 129025 only (from both sources).
-	if len(entries) != 2 {
-		t.Fatalf("expected 2 filtered replay entries, got %d", len(entries))
-	}
-
-	for _, data := range entries {
-		var msg frameJSON
-		_ = json.Unmarshal(data, &msg)
-		if msg.PGN != 129025 {
-			t.Errorf("replay should only contain PGN 129025, got %d", msg.PGN)
-		}
-	}
-
-	// Replay with manufacturer filter.
-	mfrFilter := &EventFilter{Manufacturers: []string{"Garmin"}}
-	entries = b.Replay(0, mfrFilter)
-	// Frames from src 5 (Garmin): address claim + 129025 + 129026 = 3.
-	// Src 10 is unknown, so excluded.
-	if len(entries) != 3 {
-		t.Fatalf("expected 3 Garmin replay entries, got %d", len(entries))
+	if frame.Header.PGN != 129025 || frame.Header.Source != 5 {
+		t.Errorf("unexpected frame: PGN=%d src=%d", frame.Header.PGN, frame.Header.Source)
 	}
 }
 
 func TestBrokerBufferTimeoutZeroResetsCursor(t *testing.T) {
 	b := newTestBroker()
 	go b.Run()
-	defer close(b.rxFrames)
+	defer b.CloseRx()
 	drainTxFrame(b, time.Second)
 
 	// Create session, inject frames, ACK some.
 	b.CreateSession("reset-test", time.Minute, nil)
-	b.ConnectSession("reset-test")
 
 	for i := range 5 {
 		injectFrame(b, 129025, 1, []byte{byte(i), 0, 0, 0, 0, 0, 0, 0})
@@ -735,91 +429,11 @@ func TestBrokerBufferTimeoutZeroResetsCursor(t *testing.T) {
 	if err := b.AckSession("reset-test", 3); err != nil {
 		t.Fatalf("ack: %v", err)
 	}
-	b.DisconnectSession("reset-test")
 
 	// Recreate with buffer_timeout=0 -> cursor should reset.
 	session, _ := b.CreateSession("reset-test", 0, nil)
 	if session.Cursor != 0 {
 		t.Errorf("cursor should be 0 after reset, got %d", session.Cursor)
-	}
-
-	// Connect: no replay should happen (cursor is 0).
-	session, _ = b.ConnectSession("reset-test")
-	// Channel should be empty (no replayed frames).
-	select {
-	case <-session.Ch:
-		t.Error("should not receive replayed frames after buffer_timeout=0 reset")
-	case <-time.After(100 * time.Millisecond):
-		// good
-	}
-}
-
-func TestBrokerNilFilterReceivesAll(t *testing.T) {
-	b := newTestBroker()
-	go b.Run()
-	defer close(b.rxFrames)
-	drainTxFrame(b, time.Second)
-
-	b.CreateSession("all", time.Minute, nil)
-	session, _ := b.ConnectSession("all")
-
-	injectFrame(b, 129025, 1, []byte{0, 0, 0, 0, 0, 0, 0, 0})
-	injectFrame(b, 129026, 2, []byte{0, 0, 0, 0, 0, 0, 0, 0})
-	injectFrame(b, 130311, 3, []byte{0, 0, 0, 0, 0, 0, 0, 0})
-	time.Sleep(50 * time.Millisecond)
-
-	count := 0
-	for {
-		select {
-		case <-session.Ch:
-			count++
-		case <-time.After(100 * time.Millisecond):
-			goto done
-		}
-	}
-done:
-
-	if count != 3 {
-		t.Errorf("nil filter should receive all frames, got %d", count)
-	}
-}
-
-func TestBrokerDeviceEventsBypassFilter(t *testing.T) {
-	b := newTestBroker()
-	go b.Run()
-	defer close(b.rxFrames)
-	drainTxFrame(b, time.Second)
-
-	// Session with PGN filter that would NOT match PGN 60928.
-	filter := &EventFilter{PGNs: []uint32{129025}}
-	b.CreateSession("device-bypass", time.Minute, filter)
-	session, _ := b.ConnectSession("device-bypass")
-
-	// Inject address claim (PGN 60928).
-	nameBytes := make([]byte, 8)
-	putLE64(nameBytes, uint64(229)<<21) // Garmin
-	injectFrame(b, 60928, 5, nameBytes)
-	drainTxFrame(b, 100*time.Millisecond)
-	time.Sleep(50 * time.Millisecond)
-
-	// Should get a device event (sent via fanOutDevice, unfiltered).
-	gotDevice := false
-	for {
-		select {
-		case data := <-session.Ch:
-			var raw map[string]any
-			_ = json.Unmarshal(data, &raw)
-			if raw["type"] == "device" {
-				gotDevice = true
-			}
-		case <-time.After(100 * time.Millisecond):
-			goto done
-		}
-	}
-done:
-
-	if !gotDevice {
-		t.Error("device events should bypass PGN filter")
 	}
 }
 

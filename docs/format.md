@@ -27,10 +27,14 @@
 
  Offset  Size  Field
  0       3     Magic: "LPJ" (0x4C 0x50 0x4A)
- 3       1     Version: 0x01
+ 3       1     Version: 0x01 or 0x02
  4       4     BlockSize: uint32 LE (bytes, power of 2, default 262144, min 4096)
  8       4     Flags: uint32 LE, bits 0-7 = CompressionType (0=none, 1=zstd, 2=zstd+dict)
  12      4     Reserved: uint32 LE (0)
+
+ Version 0x02 adds BaseSeq (uint64 LE) to block headers for sequence-based seeking.
+ The reader supports both v1 and v2. v1 files have no seq info; consumers treat them
+ as unavailable for seq-based seeking.
 
  CompressionType values:
    0 = none (uncompressed, fixed-size blocks)
@@ -39,10 +43,14 @@
 
  Uncompressed Block Layout (CompressionType=0, BlockSize bytes)
 
+ v1: frame data starts at +8.
+ v2: BaseSeq at +8, frame data starts at +16.
+
  ┌──────────────────────────────────────────────────────────┐
  │ +0       BaseTime (8 bytes, int64 LE)                    │  Unix microseconds, first frame
+ │ +8       BaseSeq  (8 bytes, uint64 LE) [v2 only]        │  Seq of first frame in block
  ├──────────────────────────────────────────────────────────┤
- │ +8       Frame data                                      │
+ │ +8/+16   Frame data                                      │
  │          [delta] [CANID] [8B data]          (standard)   │  bit 31 of CANID = 1
  │          [delta] [CANID] [len] [data]       (extended)   │  bit 31 of CANID = 0
  │          ...                                             │
@@ -63,12 +71,16 @@
 
  Compressed Block Layout (CompressionType>0)
 
- Each compressed block is preceded by a 12-byte header, followed by the compressed payload:
+ Each compressed block is preceded by a header, followed by the compressed payload.
+
+ v1: 12-byte header (BaseTime + CompressedLen).
+ v2: 20-byte header (BaseTime + BaseSeq + CompressedLen).
 
  ┌──────────────────────────────────────────────────────────┐
- │ Block Header (12 bytes)                                  │
+ │ Block Header (12 bytes v1 / 20 bytes v2)                │
  │   BaseTime:       int64 LE (8 bytes, unix microseconds)  │  Duplicated from block, enables seeking
- │   CompressedLen:  uint32 LE (4 bytes)                    │  without decompression
+ │   BaseSeq:        uint64 LE (8 bytes) [v2 only]         │  without decompression
+ │   CompressedLen:  uint32 LE (4 bytes)                    │
  ├──────────────────────────────────────────────────────────┤
  │ CompressedData (CompressedLen bytes)                     │
  │   zstd-compressed full block (decompresses to BlockSize) │
@@ -80,9 +92,13 @@
 
  Each block carries its own zstd dictionary, making it independently decompressible with zero external state.
 
+ v1: 16-byte header (BaseTime + DictLen + CompressedLen).
+ v2: 24-byte header (BaseTime + BaseSeq + DictLen + CompressedLen).
+
  ┌──────────────────────────────────────────────────────────┐
- │ Block Header (16 bytes)                                  │
+ │ Block Header (16 bytes v1 / 24 bytes v2)                │
  │   BaseTime:       int64 LE (8 bytes, unix microseconds)  │
+ │   BaseSeq:        uint64 LE (8 bytes) [v2 only]         │
  │   DictLen:        uint32 LE (4 bytes, dictionary size)   │
  │   CompressedLen:  uint32 LE (4 bytes, payload size)      │
  ├──────────────────────────────────────────────────────────┤
@@ -191,6 +207,11 @@
  3. Seek to block offset, read + decompress block
  4. Parse frames within decompressed block
  O(log N) in-memory comparison + 1 read + 1 decompress.
+
+ Sequence-based seeking (v2 only):
+ Same algorithms as time-based, but searches on BaseSeq instead of BaseTime.
+ Frame at index i in a v2 block has seq = BaseSeq + i.
+ Used by Consumer for tiered replay: journal files -> ring buffer -> live.
 
  Size Estimates
 

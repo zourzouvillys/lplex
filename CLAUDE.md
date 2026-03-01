@@ -56,13 +56,15 @@ Broker goroutine (single writer, owns all state)
     |  assigns monotonic sequence numbers
     |  appends pre-serialized JSON to ring buffer (64k entries, power-of-2)
     |  updates device registry (PGN 60928 address claim, PGN 126996 product info)
-    |  fans out to sessions and ephemeral subscribers (with per-client filtering)
+    |  fans out to ephemeral subscribers (with per-client filtering)
+    |  notifies pull-based consumers (non-blocking send to notify channels)
     |  sends ISO requests to discover new devices on the bus
     |  non-blocking send to journal channel (if enabled)
     |
-    +---> ring buffer ([]ringEntry, lock-free writes, RLock for replay reads)
+    +---> ring buffer ([]ringEntry, lock-free writes, RLock for consumer reads)
     +---> DeviceRegistry (RWMutex, keyed by source address)
-    +---> sessions map (buffered clients: channels, filters, cursors)
+    +---> consumers map (pull-based: cursor, filter, notify chan)
+    +---> sessions map (buffered client metadata: cursor, filter, timeout)
     +---> subscribers map (ephemeral clients: channels, filters, no state)
     +---> journal chan (16384-entry buffer, optional)
     |
@@ -74,12 +76,13 @@ HTTP Server (:8089)                    JournalWriter goroutine
     +-- GET  /clients/{id}/events           |  rotates files by duration/size
     +-- PUT  /clients/{id}/ack              |  tracks device table per block
     +-- POST /send                          v
-    +-- GET  /devices                  .lpj journal files
+    +-- GET  /devices                  .lpj journal files (v2, with BaseSeq)
 
-CANWriter goroutine
-    |  reads from txFrames chan
-    |  fragments fast-packets for TX
-    |  writes to SocketCAN
+CANWriter goroutine                    Consumer (pull-based reader)
+    |  reads from txFrames chan            |  reads from tiered log:
+    |  fragments fast-packets for TX      |  1. journal files (oldest)
+    |  writes to SocketCAN                |  2. ring buffer (recent)
+                                          |  3. live notification (blocking wait)
 ```
 
 ## Package Structure
@@ -97,7 +100,8 @@ CANWriter goroutine
 
 | File | Owns |
 |---|---|
-| `broker.go` | `Broker`, `ClientSession`, `subscriber`, `EventFilter`, ring buffer, fan-out, session lifecycle, ephemeral subscriptions, journal feed |
+| `broker.go` | `Broker`, `ClientSession`, `subscriber`, `EventFilter`, ring buffer, fan-out, session lifecycle, ephemeral subscriptions, consumer registry, journal feed |
+| `consumer.go` | `Consumer`, `Frame`, `ErrFallenBehind`, pull-based tiered reader (journal -> ring -> live), journal fallback with file discovery and seq-based seeking |
 | `server.go` | HTTP handlers, ephemeral + buffered SSE streaming, filter query param parsing, ISO 8601 duration parser |
 | `can.go` | `CANReader` (SocketCAN rx + fast-packet reassembly), `CANWriter` (SocketCAN tx + fragmentation) |
 | `canid.go` | Thin wrappers re-exporting `canbus.ParseCANID`, `canbus.BuildCANID` |
@@ -128,10 +132,12 @@ lplexdump -server http://inuc1.local:8089 -buffer-timeout PT5M
 
 ## Key Design Decisions
 
+- **Pull-based Consumer model**: buffered clients use a Kafka/Kinesis-style Consumer that reads from a tiered log (journal -> ring buffer -> live notification). Each consumer iterates at its own pace via `Next(ctx)`. Sessions store only metadata (cursor, filter, timeout); the HTTP handler creates a Consumer on each connection.
 - **Pre-serialized JSON in ring buffer**: frames are serialized once when received, not per-client.
-- **Resolved filters for replay**: device-based filters are flattened to source addresses before taking the ring lock.
-- **Ephemeral subscribers are separate from sessions**: clean separation, no lifecycle overhead.
+- **Resolved filters**: device-based filters are flattened to source addresses at consumer creation time, avoiding device registry lookups during iteration.
+- **Ephemeral subscribers are separate from sessions**: ephemeral `/events` uses push-based channels. Session-based `/clients/{id}/events` uses pull-based Consumer.
 - **ISO Request on unknown source**: broker discovers devices automatically.
+- **Journal v2 format**: blocks include `BaseSeq` for O(log n) sequence-based seeking. Reader supports both v1 (time-only) and v2 (time + seq). Consumer falls back to journal files when behind the ring buffer, returning `ErrFallenBehind` when data is unavailable.
 - **Journal at broker level**: records reassembled frames (not raw CAN fragments), tapped via non-blocking channel send after fan-out. See `docs/format.md` for the `.lpj` binary format spec.
 - **Block-level zstd compression**: journal blocks are compressed individually with zstd (default enabled, ~4x ratio at 256KB blocks). Each compressed block has a 12-byte header (BaseTime + CompressedLen). A block index at EOF provides O(1) offset lookup; forward-scan fallback handles crash-truncated files.
 

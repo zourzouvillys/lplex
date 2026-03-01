@@ -319,27 +319,24 @@ func TestSSEReplay(t *testing.T) {
 	createReq := httptest.NewRequest("PUT", "/clients/replay-test", strings.NewReader(`{"buffer_timeout":"PT1M"}`))
 	srv.ServeHTTP(httptest.NewRecorder(), createReq)
 
-	// Connect and get some frames
-	b.ConnectSession("replay-test")
-
+	// Inject 5 frames
 	for i := range 5 {
 		injectFrame(b, 129025, 1, []byte{byte(i), 0, 0, 0, 0, 0, 0, 0})
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	// ACK seq 3
+	// ACK seq 3 (session cursor = 3)
 	if err := b.AckSession("replay-test", 3); err != nil {
 		t.Fatalf("ack: %v", err)
 	}
-	b.DisconnectSession("replay-test")
 
-	// Inject more frames while disconnected
+	// Inject 3 more frames (seq 6, 7, 8)
 	for i := range 3 {
 		injectFrame(b, 129025, 1, []byte{byte(i + 10), 0, 0, 0, 0, 0, 0, 0})
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	// Reconnect via SSE, should replay from seq 4
+	// Connect via SSE. Consumer should start from cursor+1=4 and replay through ring.
 	resp, err := http.Get(ts.URL + "/clients/replay-test/events")
 	if err != nil {
 		t.Fatal(err)
@@ -369,7 +366,7 @@ func TestSSEReplay(t *testing.T) {
 
 	select {
 	case <-done:
-		// Should have replayed 4, 5 and then live 6, 7, 8
+		// Should have replayed 4, 5, 6, 7, 8
 		if seqs[0] != 4 {
 			t.Errorf("first replayed seq: got %d, want 4", seqs[0])
 		}

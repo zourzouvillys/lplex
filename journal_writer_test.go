@@ -1755,3 +1755,269 @@ func compressionName(c journal.CompressionType) string {
 		return "unknown"
 	}
 }
+
+// makeFrameWithSeq builds an RxFrame with a given seq number.
+func makeFrameWithSeq(t time.Time, pgn uint32, src uint8, data []byte, seq uint64) RxFrame {
+	f := makeFrame(t, pgn, src, data)
+	f.Seq = seq
+	return f
+}
+
+func TestJournalV2BaseSeqRoundTrip(t *testing.T) {
+	base := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	// Create frames with explicit seq numbers.
+	frames := []RxFrame{
+		makeFrameWithSeq(base, 129025, 10, []byte{1, 2, 3, 4, 5, 6, 7, 8}, 100),
+		makeFrameWithSeq(base.Add(time.Millisecond), 129026, 11, []byte{8, 7, 6, 5, 4, 3, 2, 1}, 101),
+		makeFrameWithSeq(base.Add(2*time.Millisecond), 129025, 10, []byte{0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22}, 102),
+	}
+
+	for _, compression := range []journal.CompressionType{
+		journal.CompressionNone,
+		journal.CompressionZstd,
+		journal.CompressionZstdDict,
+	} {
+		t.Run(compressionName(compression), func(t *testing.T) {
+			dir := t.TempDir()
+			devices := NewDeviceRegistry()
+			ch := make(chan RxFrame, len(frames))
+			for _, f := range frames {
+				ch <- f
+			}
+			close(ch)
+
+			cfg := JournalConfig{Dir: dir, BlockSize: 4096, Compression: compression}
+			w, err := NewJournalWriter(cfg, devices, ch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Run(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+
+			entries, _ := os.ReadDir(dir)
+			f, err := os.Open(filepath.Join(dir, entries[0].Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = f.Close() }()
+
+			reader, err := journal.NewReader(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if reader.Version() != journal.Version2 {
+				t.Fatalf("expected version 2, got %d", reader.Version())
+			}
+
+			// Read all frames and check FrameSeq.
+			var seqs []uint64
+			for reader.Next() {
+				seqs = append(seqs, reader.FrameSeq())
+			}
+			if reader.Err() != nil {
+				t.Fatal(reader.Err())
+			}
+
+			if len(seqs) != 3 {
+				t.Fatalf("expected 3 frames, got %d", len(seqs))
+			}
+			for i, want := range []uint64{100, 101, 102} {
+				if seqs[i] != want {
+					t.Errorf("frame %d: FrameSeq = %d, want %d", i, seqs[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestJournalV2SeekToSeq(t *testing.T) {
+	base := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	// Generate enough frames to span multiple blocks.
+	var frames []RxFrame
+	for i := range 700 {
+		frames = append(frames, makeFrameWithSeq(
+			base.Add(time.Duration(i)*time.Millisecond),
+			129025, 10,
+			[]byte{byte(i), byte(i >> 8), 3, 4, 5, 6, 7, 8},
+			uint64(1000+i),
+		))
+	}
+
+	for _, compression := range []journal.CompressionType{
+		journal.CompressionNone,
+		journal.CompressionZstd,
+	} {
+		t.Run(compressionName(compression), func(t *testing.T) {
+			dir := t.TempDir()
+			devices := NewDeviceRegistry()
+			ch := make(chan RxFrame, len(frames))
+			for _, f := range frames {
+				ch <- f
+			}
+			close(ch)
+
+			cfg := JournalConfig{Dir: dir, BlockSize: 4096, Compression: compression}
+			w, err := NewJournalWriter(cfg, devices, ch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Run(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+
+			entries, _ := os.ReadDir(dir)
+			f, err := os.Open(filepath.Join(dir, entries[0].Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = f.Close() }()
+
+			reader, err := journal.NewReader(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if reader.BlockCount() < 2 {
+				t.Fatalf("need multiple blocks for this test, got %d", reader.BlockCount())
+			}
+
+			// Seek to a seq in the middle.
+			targetSeq := uint64(1350)
+			if err := reader.SeekToSeq(targetSeq); err != nil {
+				t.Fatal(err)
+			}
+
+			// The first frame after seeking should have seq <= targetSeq.
+			if !reader.Next() {
+				t.Fatal("expected a frame after SeekToSeq")
+			}
+			firstSeq := reader.FrameSeq()
+			if firstSeq > targetSeq {
+				t.Errorf("first frame seq %d > target %d", firstSeq, targetSeq)
+			}
+
+			// Iterate until we find the exact target seq.
+			found := firstSeq == targetSeq
+			for reader.Next() {
+				if reader.FrameSeq() == targetSeq {
+					found = true
+					break
+				}
+				if reader.FrameSeq() > targetSeq {
+					break
+				}
+			}
+			if !found {
+				t.Errorf("target seq %d not found after seeking", targetSeq)
+			}
+		})
+	}
+}
+
+func TestJournalV1BackwardCompat(t *testing.T) {
+	// Create a minimal v1 journal file by hand and verify the v2 reader can read it.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test-v1.lpj")
+
+	blockSize := 4096
+	block := make([]byte, blockSize)
+
+	// Build a block with one standard frame.
+	baseTimeUs := int64(1750000000000000) // some unix microseconds
+	binary.LittleEndian.PutUint64(block[0:8], uint64(baseTimeUs))
+
+	// Frame at offset 8 (v1): delta=0 (varint 0x00), CANID with standard flag, 8 bytes data
+	off := 8
+	block[off] = 0x00 // delta varint = 0
+	off++
+	// CAN ID for PGN 129025, src 10, prio 2: build it
+	canID := BuildCANID(CANHeader{Priority: 2, PGN: 129025, Source: 10, Destination: 0xFF})
+	canID |= 0x80000000 // standard flag
+	binary.LittleEndian.PutUint32(block[off:], canID)
+	off += 4
+	copy(block[off:], []byte{0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22})
+
+	// Device table: 0 entries (2 bytes)
+	devTableSize := 2
+	devTableOff := blockSize - journal.BlockTrailerLen - devTableSize
+	binary.LittleEndian.PutUint16(block[devTableOff:], 0)
+
+	// Trailer
+	trailerOff := blockSize - journal.BlockTrailerLen
+	binary.LittleEndian.PutUint16(block[trailerOff:], uint16(devTableSize))
+	binary.LittleEndian.PutUint32(block[trailerOff+2:], 1) // frameCount=1
+	checksum := crc32.Checksum(block[:blockSize-4], journal.CRC32cTable)
+	binary.LittleEndian.PutUint32(block[blockSize-4:], checksum)
+
+	// Write file: header + block
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hdr [16]byte
+	copy(hdr[0:3], journal.Magic[:])
+	hdr[3] = journal.Version // v1!
+	binary.LittleEndian.PutUint32(hdr[4:8], uint32(blockSize))
+	// flags = 0 (CompressionNone)
+	if _, err := f.Write(hdr[:]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(block); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+
+	// Read it back with the v2-aware reader.
+	rf, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rf.Close() }()
+
+	reader, err := journal.NewReader(rf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if reader.Version() != journal.Version {
+		t.Errorf("version: got %d, want %d (v1)", reader.Version(), journal.Version)
+	}
+	if reader.BlockCount() != 1 {
+		t.Fatalf("block count: got %d, want 1", reader.BlockCount())
+	}
+
+	if !reader.Next() {
+		t.Fatal("expected one frame")
+	}
+	entry := reader.Frame()
+	if entry.Header.PGN != 129025 {
+		t.Errorf("PGN: got %d, want 129025", entry.Header.PGN)
+	}
+	if entry.Header.Source != 10 {
+		t.Errorf("Source: got %d, want 10", entry.Header.Source)
+	}
+	if !bytes.Equal(entry.Data, []byte{0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22}) {
+		t.Errorf("Data: got %x", entry.Data)
+	}
+
+	// FrameSeq should return 0 for v1 files.
+	if reader.FrameSeq() != 0 {
+		t.Errorf("FrameSeq should be 0 for v1, got %d", reader.FrameSeq())
+	}
+
+	// SeekToSeq should error on v1 files.
+	if err := reader.SeekToSeq(1); err == nil {
+		t.Error("SeekToSeq should fail on v1 files")
+	}
+
+	if reader.Next() {
+		t.Error("should not have more frames")
+	}
+	if reader.Err() != nil {
+		t.Fatal(reader.Err())
+	}
+}

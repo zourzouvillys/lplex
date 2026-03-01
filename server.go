@@ -130,11 +130,25 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, ok := s.broker.ConnectSession(clientID)
-	if !ok {
+	session := s.broker.GetSession(clientID)
+	if session == nil {
 		http.Error(w, "session not found, create it first with PUT /clients/{id}", http.StatusNotFound)
 		return
 	}
+
+	// Determine starting cursor: resume from last ACK, or live-only.
+	cursor := s.broker.CurrentSeq() + 1 // default: live only
+	if session.Cursor > 0 {
+		cursor = session.Cursor + 1 // resume after last ACK'd seq
+	}
+
+	consumer := s.broker.NewConsumer(ConsumerConfig{
+		Cursor: cursor,
+		Filter: session.Filter,
+	})
+	defer func() { _ = consumer.Close() }()
+
+	s.broker.TouchSession(clientID)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -142,34 +156,19 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	flusher.Flush()
 
-	defer s.broker.DisconnectSession(clientID)
-
 	ctx := r.Context()
-
-	// Replay buffered frames if client has a cursor
-	if session.Cursor > 0 {
-		entries := s.broker.Replay(session.Cursor, session.Filter)
-		for _, data := range entries {
-			if ctx.Err() != nil {
-				return
-			}
-			fmt.Fprintf(w, "data: %s\n\n", data)
-		}
-		flusher.Flush()
-	}
-
-	// Stream live
 	for {
-		select {
-		case <-ctx.Done():
+		frame, err := consumer.Next(ctx)
+		if err != nil {
 			return
-		case data, ok := <-session.Ch:
-			if !ok {
-				return
-			}
-			fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
 		}
+		jsonBytes, err := frame.JSON()
+		if err != nil {
+			s.logger.Error("failed to serialize frame", "error", err)
+			continue
+		}
+		fmt.Fprintf(w, "data: %s\n\n", jsonBytes)
+		flusher.Flush()
 	}
 }
 

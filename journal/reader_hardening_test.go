@@ -45,7 +45,7 @@ func TestReadBlockIndexRejectsExcessiveCount(t *testing.T) {
 	}
 	defer func() { _ = rf.Close() }()
 
-	_, err = readBlockIndex(rf, fileSize)
+	_, err = readBlockIndex(rf, fileSize, Version)
 	if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
 		t.Fatalf("expected excessive count error, got %v", err)
 	}

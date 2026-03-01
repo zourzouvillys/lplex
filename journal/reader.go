@@ -21,10 +21,11 @@ type Entry struct {
 	Data      []byte
 }
 
-// blockInfo stores the file offset and base time for a block.
+// blockInfo stores the file offset, base time, and base seq for a block.
 type blockInfo struct {
 	Offset   int64
 	BaseTime int64
+	BaseSeq  uint64 // v2 only; 0 for v1
 }
 
 // Reader reads frames from a block-based journal file.
@@ -33,6 +34,7 @@ type Reader struct {
 	blockSize   int
 	blockBuf    []byte
 	compression CompressionType
+	version     byte // 0x01 or 0x02
 
 	// block index (built on open from index footer or forward scan)
 	blocks []blockInfo
@@ -46,6 +48,7 @@ type Reader struct {
 	baseTimeUs   int64
 	lastTimeUs   int64
 	devTableOff  int
+	baseSeqBlock uint64 // v2 only: base seq for current loaded block
 
 	// current frame (valid after Next returns true)
 	entry Entry
@@ -64,8 +67,9 @@ func NewReader(r io.ReadSeeker) (*Reader, error) {
 	if hdr[0] != Magic[0] || hdr[1] != Magic[1] || hdr[2] != Magic[2] {
 		return nil, fmt.Errorf("not a journal file (bad magic)")
 	}
-	if hdr[3] != Version {
-		return nil, fmt.Errorf("unsupported journal version %d", hdr[3])
+	version := hdr[3]
+	if version != Version && version != Version2 {
+		return nil, fmt.Errorf("unsupported journal version %d", version)
 	}
 	blockSize := int(binary.LittleEndian.Uint32(hdr[4:8]))
 	if blockSize < 4096 || blockSize&(blockSize-1) != 0 {
@@ -88,6 +92,7 @@ func NewReader(r io.ReadSeeker) (*Reader, error) {
 		blockSize:    blockSize,
 		blockBuf:     make([]byte, blockSize),
 		compression:  compression,
+		version:      version,
 		currentBlock: -1,
 	}
 
@@ -104,9 +109,9 @@ func NewReader(r io.ReadSeeker) (*Reader, error) {
 		// Populate base times lazily during SeekToTime (read on demand).
 	} else {
 		// Compressed: try block index, fall back to forward scan.
-		blocks, indexErr := readBlockIndex(r, end)
+		blocks, indexErr := readBlockIndex(r, end, version)
 		if indexErr != nil {
-			blocks, err = scanBlocks(r, end, compression)
+			blocks, err = scanBlocks(r, end, compression, version)
 			if err != nil {
 				return nil, fmt.Errorf("scan compressed blocks: %w", err)
 			}
@@ -118,7 +123,7 @@ func NewReader(r io.ReadSeeker) (*Reader, error) {
 }
 
 // readBlockIndex tries to read the block index from the end of the file.
-func readBlockIndex(r io.ReadSeeker, fileSize int64) ([]blockInfo, error) {
+func readBlockIndex(r io.ReadSeeker, fileSize int64, version byte) ([]blockInfo, error) {
 	// Need at least 8 bytes for Count(4) + Magic(4)
 	if fileSize < int64(FileHeaderSize)+8 {
 		return nil, fmt.Errorf("file too small for block index")
@@ -176,30 +181,43 @@ func readBlockIndex(r io.ReadSeeker, fileSize int64) ([]blockInfo, error) {
 		blocks[i].Offset = off
 	}
 
-	// Read base times from each block header (BaseTime is always at offset 0).
-	var timeBuf [8]byte
+	// Read base times (and base seqs for v2) from each block header.
+	hdrReadLen := 8 // v1: just BaseTime
+	if version == Version2 {
+		hdrReadLen = 16 // v2: BaseTime + BaseSeq
+	}
+	hdrBuf := make([]byte, hdrReadLen)
 	for i := range blocks {
 		if _, err := r.Seek(blocks[i].Offset, io.SeekStart); err != nil {
 			return nil, fmt.Errorf("seek to block %d header: %w", i, err)
 		}
-		if _, err := io.ReadFull(r, timeBuf[:]); err != nil {
+		if _, err := io.ReadFull(r, hdrBuf); err != nil {
 			return nil, fmt.Errorf("read block %d header: %w", i, err)
 		}
-		blocks[i].BaseTime = int64(binary.LittleEndian.Uint64(timeBuf[0:8]))
+		blocks[i].BaseTime = int64(binary.LittleEndian.Uint64(hdrBuf[0:8]))
+		if version == Version2 {
+			blocks[i].BaseSeq = binary.LittleEndian.Uint64(hdrBuf[8:16])
+		}
 	}
 
 	return blocks, nil
 }
 
 // scanBlocks forward-scans compressed blocks to build the block info table.
-func scanBlocks(r io.ReadSeeker, fileSize int64, compression CompressionType) ([]blockInfo, error) {
+func scanBlocks(r io.ReadSeeker, fileSize int64, compression CompressionType, version byte) ([]blockInfo, error) {
 	if _, err := r.Seek(int64(FileHeaderSize), io.SeekStart); err != nil {
 		return nil, err
 	}
 
-	hdrLen := BlockHeaderLen
+	// v2 adds 8 bytes (BaseSeq) after BaseTime in compressed headers
+	sfl := 0
+	if version == Version2 {
+		sfl = 8
+	}
+
+	hdrLen := BlockHeaderLen + sfl
 	if compression == CompressionZstdDict {
-		hdrLen = BlockHeaderLenDict
+		hdrLen = BlockHeaderLenDict + sfl
 	}
 
 	var blocks []blockInfo
@@ -214,17 +232,21 @@ func scanBlocks(r io.ReadSeeker, fileSize int64, compression CompressionType) ([
 			break
 		}
 		baseTime := int64(binary.LittleEndian.Uint64(hdr[0:8]))
+		var baseSeq uint64
+		if version == Version2 {
+			baseSeq = binary.LittleEndian.Uint64(hdr[8:16])
+		}
 
 		var blockEnd int64
 		if compression == CompressionZstdDict {
-			dictLen := binary.LittleEndian.Uint32(hdr[8:12])
-			compressedLen := binary.LittleEndian.Uint32(hdr[12:16])
+			dictLen := binary.LittleEndian.Uint32(hdr[8+sfl : 12+sfl])
+			compressedLen := binary.LittleEndian.Uint32(hdr[12+sfl : 16+sfl])
 			if dictLen == 0 && compressedLen == 0 {
 				break
 			}
 			blockEnd = pos + int64(hdrLen) + int64(dictLen) + int64(compressedLen)
 		} else {
-			compressedLen := binary.LittleEndian.Uint32(hdr[8:12])
+			compressedLen := binary.LittleEndian.Uint32(hdr[8+sfl : 12+sfl])
 			if compressedLen == 0 {
 				break
 			}
@@ -238,6 +260,7 @@ func scanBlocks(r io.ReadSeeker, fileSize int64, compression CompressionType) ([
 		blocks = append(blocks, blockInfo{
 			Offset:   pos,
 			BaseTime: baseTime,
+			BaseSeq:  baseSeq,
 		})
 		pos = blockEnd
 	}
@@ -271,6 +294,76 @@ func (jr *Reader) BlockCount() int {
 	return len(jr.blocks)
 }
 
+// Version returns the journal format version (0x01 or 0x02).
+func (jr *Reader) Version() byte {
+	return jr.version
+}
+
+// FrameSeq returns the sequence number of the current frame.
+// Only valid after Next returns true. Returns 0 for v1 files (no seq info).
+func (jr *Reader) FrameSeq() uint64 {
+	if jr.version != Version2 || jr.frameIdx == 0 {
+		return 0
+	}
+	return jr.baseSeqBlock + uint64(jr.frameIdx-1)
+}
+
+// SeekToSeq positions the reader at the block containing the given sequence
+// number via binary search on BaseSeq. Only works for v2 files.
+// Returns an error for v1 files or if the seq is not found.
+func (jr *Reader) SeekToSeq(seq uint64) error {
+	if jr.version != Version2 {
+		return fmt.Errorf("seq seeking requires journal v2")
+	}
+	if len(jr.blocks) == 0 {
+		return fmt.Errorf("empty journal")
+	}
+
+	if jr.compression != CompressionNone {
+		// Compressed: base seqs are already in memory.
+		idx := sort.Search(len(jr.blocks), func(i int) bool {
+			return jr.blocks[i].BaseSeq > seq
+		})
+		if idx > 0 {
+			idx--
+		}
+		return jr.loadBlock(idx)
+	}
+
+	// Uncompressed: read BaseSeq from disk (O(log n) seeks).
+	var seqBuf [8]byte
+	lo, hi := 0, len(jr.blocks)-1
+	result := 0
+	for lo <= hi {
+		mid := lo + (hi-lo)/2
+		// BaseSeq is at offset 8 within the block (after BaseTime)
+		if _, err := jr.r.Seek(jr.blocks[mid].Offset+8, io.SeekStart); err != nil {
+			return err
+		}
+		if _, err := io.ReadFull(jr.r, seqBuf[:]); err != nil {
+			return err
+		}
+		baseSeq := binary.LittleEndian.Uint64(seqBuf[:])
+		if baseSeq <= seq {
+			result = mid
+			lo = mid + 1
+		} else {
+			hi = mid - 1
+		}
+	}
+
+	return jr.loadBlock(result)
+}
+
+// seqFieldLen returns 8 for v2 (BaseSeq field present in compressed headers)
+// or 0 for v1.
+func (jr *Reader) seqFieldLen() int {
+	if jr.version == Version2 {
+		return 8
+	}
+	return 0
+}
+
 // InspectBlock loads block n and returns its metadata without iterating frames.
 func (jr *Reader) InspectBlock(n int) (BlockInfo, error) {
 	if n < 0 || n >= len(jr.blocks) {
@@ -283,25 +376,26 @@ func (jr *Reader) InspectBlock(n int) (BlockInfo, error) {
 	}
 
 	// For compressed blocks, read the header to get CompressedLen (and DictLen).
+	sfl := jr.seqFieldLen()
 	if jr.compression == CompressionZstdDict {
 		if _, err := jr.r.Seek(jr.blocks[n].Offset, io.SeekStart); err != nil {
 			return bi, err
 		}
-		hdr := make([]byte, BlockHeaderLenDict)
+		hdr := make([]byte, BlockHeaderLenDict+sfl)
 		if _, err := io.ReadFull(jr.r, hdr); err != nil {
 			return bi, err
 		}
-		bi.DictLen = int(binary.LittleEndian.Uint32(hdr[8:12]))
-		bi.CompressedLen = int(binary.LittleEndian.Uint32(hdr[12:16]))
+		bi.DictLen = int(binary.LittleEndian.Uint32(hdr[8+sfl : 12+sfl]))
+		bi.CompressedLen = int(binary.LittleEndian.Uint32(hdr[12+sfl : 16+sfl]))
 	} else if jr.compression != CompressionNone {
 		if _, err := jr.r.Seek(jr.blocks[n].Offset, io.SeekStart); err != nil {
 			return bi, err
 		}
-		hdr := make([]byte, BlockHeaderLen)
+		hdr := make([]byte, BlockHeaderLen+sfl)
 		if _, err := io.ReadFull(jr.r, hdr); err != nil {
 			return bi, err
 		}
-		bi.CompressedLen = int(binary.LittleEndian.Uint32(hdr[8:12]))
+		bi.CompressedLen = int(binary.LittleEndian.Uint32(hdr[8+sfl : 12+sfl]))
 	}
 
 	// Load the block to read trailer (frame count, device table)
@@ -531,13 +625,15 @@ func (jr *Reader) loadCompressedBlock(n int) error {
 		return jr.loadDictCompressedBlock(n)
 	}
 
-	// Read 12-byte header: BaseTime(8) + CompressedLen(4)
-	hdr := make([]byte, BlockHeaderLen)
+	// Read header: BaseTime(8) [+ BaseSeq(8) for v2] + CompressedLen(4)
+	sfl := jr.seqFieldLen()
+	hdrLen := BlockHeaderLen + sfl
+	hdr := make([]byte, hdrLen)
 	if _, err := io.ReadFull(jr.r, hdr); err != nil {
 		return fmt.Errorf("read block %d header: %w", n, err)
 	}
-	compressedLen := binary.LittleEndian.Uint32(hdr[8:12])
-	maxPayload, err := jr.blockPayloadLimit(n, BlockHeaderLen)
+	compressedLen := binary.LittleEndian.Uint32(hdr[8+sfl : 12+sfl])
+	maxPayload, err := jr.blockPayloadLimit(n, hdrLen)
 	if err != nil {
 		return err
 	}
@@ -576,14 +672,16 @@ func (jr *Reader) loadCompressedBlock(n int) error {
 // If DictLen=0, falls back to plain zstd decompression.
 // Caller has already seeked to the block offset.
 func (jr *Reader) loadDictCompressedBlock(n int) error {
-	// Read 16-byte header: BaseTime(8) + DictLen(4) + CompressedLen(4)
-	hdr := make([]byte, BlockHeaderLenDict)
+	// Read header: BaseTime(8) [+ BaseSeq(8) for v2] + DictLen(4) + CompressedLen(4)
+	sfl := jr.seqFieldLen()
+	hdrLen := BlockHeaderLenDict + sfl
+	hdr := make([]byte, hdrLen)
 	if _, err := io.ReadFull(jr.r, hdr); err != nil {
 		return fmt.Errorf("read block %d header: %w", n, err)
 	}
-	dictLen := binary.LittleEndian.Uint32(hdr[8:12])
-	compressedLen := binary.LittleEndian.Uint32(hdr[12:16])
-	maxPayload, err := jr.blockPayloadLimit(n, BlockHeaderLenDict)
+	dictLen := binary.LittleEndian.Uint32(hdr[8+sfl : 12+sfl])
+	compressedLen := binary.LittleEndian.Uint32(hdr[12+sfl : 16+sfl])
+	maxPayload, err := jr.blockPayloadLimit(n, hdrLen)
 	if err != nil {
 		return err
 	}
@@ -688,14 +786,22 @@ func (jr *Reader) parseLoadedBlock(n int) error {
 	frameCount := int(binary.LittleEndian.Uint32(jr.blockBuf[trailerOff+2:]))
 	baseTimeUs := int64(binary.LittleEndian.Uint64(jr.blockBuf[0:8]))
 
+	dataOffset := BlockDataOffsetV1
+	var baseSeq uint64
+	if jr.version == Version2 {
+		dataOffset = BlockDataOffsetV2
+		baseSeq = binary.LittleEndian.Uint64(jr.blockBuf[8:16])
+	}
+
 	jr.currentBlock = n
 	jr.blockData = jr.blockBuf
-	jr.blockOff = 8
+	jr.blockOff = dataOffset
 	jr.frameIdx = 0
 	jr.frameCount = frameCount
 	jr.baseTimeUs = baseTimeUs
 	jr.lastTimeUs = baseTimeUs
 	jr.devTableOff = devTableOff
+	jr.baseSeqBlock = baseSeq
 
 	return nil
 }

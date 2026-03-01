@@ -16,23 +16,25 @@ type RxFrame struct {
 	Timestamp time.Time
 	Header    CANHeader
 	Data      []byte
+	Seq       uint64 // assigned by broker in handleFrame; zero when fed by external code
 }
 
 // ringEntry is a pre-serialized frame stored in the ring buffer.
 type ringEntry struct {
-	Seq    uint64
-	Header CANHeader // original header, used for filtered replay
-	Data   []byte    // pre-serialized SSE JSON line (without "data: " prefix)
+	Seq       uint64
+	Timestamp time.Time
+	Header    CANHeader // original header, used for filtered replay
+	RawData   []byte    // raw CAN payload
+	JSON      []byte    // pre-serialized SSE JSON line (without "data: " prefix)
 }
 
-// ClientSession tracks a connected or recently-disconnected client.
+// ClientSession tracks a buffered client's metadata for persistence across
+// HTTP reconnects. The actual frame reading is done by Consumer.
 type ClientSession struct {
 	ID            string
 	Cursor        uint64        // last ACK'd sequence number (0 = never ACK'd)
 	BufferTimeout time.Duration // how long to keep buffering after disconnect
 	LastActivity  time.Time
-	Ch            chan []byte   // buffered channel for SSE fan-out
-	Connected     bool
 	Filter        *EventFilter // nil = receive all frames
 }
 
@@ -191,6 +193,12 @@ type Broker struct {
 
 	// journal channel (nil = journaling disabled)
 	journal chan<- RxFrame
+
+	// pull-based consumers
+	consumerMu sync.RWMutex
+	consumers  map[*Consumer]struct{}
+
+	journalDir string
 }
 
 // TxRequest is a frame to write to the CAN bus.
@@ -203,6 +211,7 @@ type TxRequest struct {
 type BrokerConfig struct {
 	RingSize          int           // must be power of 2
 	MaxBufferDuration time.Duration // cap on client buffer_timeout
+	JournalDir        string        // directory containing .lpj files (for consumer journal fallback)
 	Logger            *slog.Logger
 }
 
@@ -233,7 +242,9 @@ func NewBroker(cfg BrokerConfig) *Broker {
 		tail:              1,
 		sessions:          make(map[string]*ClientSession),
 		subscribers:       make(map[*subscriber]struct{}),
+		consumers:         make(map[*Consumer]struct{}),
 		maxBufferDuration: cfg.MaxBufferDuration,
+		journalDir:        cfg.JournalDir,
 	}
 }
 
@@ -311,9 +322,12 @@ func (b *Broker) handleFrame(frame RxFrame) {
 		}
 	}
 
+	// Capture seq before ring buffer write (head gets incremented inside the lock)
+	seq := b.head
+
 	// Serialize frame to JSON
 	msg := frameJSON{
-		Seq:  b.head,
+		Seq:  seq,
 		Ts:   frame.Timestamp.UTC().Format(time.RFC3339Nano),
 		Prio: frame.Header.Priority,
 		PGN:  frame.Header.PGN,
@@ -331,7 +345,13 @@ func (b *Broker) handleFrame(frame RxFrame) {
 	// Append to ring buffer
 	b.mu.Lock()
 	idx := b.head & uint64(b.ringMask)
-	b.ring[idx] = ringEntry{Seq: b.head, Header: frame.Header, Data: jsonBytes}
+	b.ring[idx] = ringEntry{
+		Seq:       b.head,
+		Timestamp: frame.Timestamp,
+		Header:    frame.Header,
+		RawData:   frame.Data,
+		JSON:      jsonBytes,
+	}
 	b.head++
 	// Advance tail if ring is full
 	if b.head-b.tail > uint64(b.ringMask+1) {
@@ -342,8 +362,12 @@ func (b *Broker) handleFrame(frame RxFrame) {
 	// Fan out to connected clients (filters checked per-session)
 	b.fanOut(frame.Header, jsonBytes)
 
+	// Notify pull-based consumers
+	b.notifyConsumers()
+
 	// Send to journal writer (non-blocking)
 	if b.journal != nil {
+		frame.Seq = seq
 		select {
 		case b.journal <- frame:
 		default:
@@ -384,24 +408,9 @@ func (b *Broker) Subscribe(filter *EventFilter) (*subscriber, func()) {
 	return sub, cleanup
 }
 
-// fanOut sends pre-serialized JSON to all connected client channels
-// and ephemeral subscribers, skipping those whose filter doesn't match.
+// fanOut sends pre-serialized JSON to all ephemeral subscribers,
+// skipping those whose filter doesn't match.
 func (b *Broker) fanOut(header CANHeader, data []byte) {
-	b.sessionMu.RLock()
-	for _, s := range b.sessions {
-		if !s.Connected {
-			continue
-		}
-		if !s.Filter.matches(header, b.devices) {
-			continue
-		}
-		select {
-		case s.Ch <- data:
-		default:
-		}
-	}
-	b.sessionMu.RUnlock()
-
 	b.subscriberMu.RLock()
 	for sub := range b.subscribers {
 		if !sub.filter.matches(header, b.devices) {
@@ -415,8 +424,7 @@ func (b *Broker) fanOut(header CANHeader, data []byte) {
 	b.subscriberMu.RUnlock()
 }
 
-// fanOutDevice sends a device discovery event to all connected clients
-// and ephemeral subscribers.
+// fanOutDevice sends a device discovery event to all ephemeral subscribers.
 func (b *Broker) fanOutDevice(dev *Device) {
 	msg := struct {
 		Type string `json:"type"`
@@ -430,18 +438,6 @@ func (b *Broker) fanOutDevice(dev *Device) {
 	if err != nil {
 		return
 	}
-
-	b.sessionMu.RLock()
-	for _, s := range b.sessions {
-		if !s.Connected {
-			continue
-		}
-		select {
-		case s.Ch <- jsonBytes:
-		default:
-		}
-	}
-	b.sessionMu.RUnlock()
 
 	b.subscriberMu.RLock()
 	for sub := range b.subscribers {
@@ -479,14 +475,6 @@ func (b *Broker) CreateSession(id string, bufferTimeout time.Duration, filter *E
 		s.LastActivity = time.Now()
 		if bufferTimeout == 0 {
 			s.Cursor = 0
-			// Drain stale channel data
-			for {
-				select {
-				case <-s.Ch:
-				default:
-					return s, seq
-				}
-			}
 		}
 		return s, seq
 	}
@@ -495,42 +483,24 @@ func (b *Broker) CreateSession(id string, bufferTimeout time.Duration, filter *E
 		ID:            id,
 		BufferTimeout: bufferTimeout,
 		LastActivity:  time.Now(),
-		Ch:            make(chan []byte, 128),
 		Filter:        filter,
 	}
 	b.sessions[id] = s
 	return s, seq
 }
 
-// ConnectSession marks a session as connected and returns its channel.
-func (b *Broker) ConnectSession(id string) (*ClientSession, bool) {
-	b.sessionMu.Lock()
-	defer b.sessionMu.Unlock()
-
-	s, ok := b.sessions[id]
-	if !ok {
-		return nil, false
-	}
-	s.Connected = true
-	s.LastActivity = time.Now()
-
-	// Drain any stale data in the channel from before
-	for {
-		select {
-		case <-s.Ch:
-		default:
-			return s, true
-		}
-	}
+// GetSession returns a session by ID, or nil if not found.
+func (b *Broker) GetSession(id string) *ClientSession {
+	b.sessionMu.RLock()
+	defer b.sessionMu.RUnlock()
+	return b.sessions[id]
 }
 
-// DisconnectSession marks a session as disconnected.
-func (b *Broker) DisconnectSession(id string) {
+// TouchSession updates the LastActivity timestamp for a session.
+func (b *Broker) TouchSession(id string) {
 	b.sessionMu.Lock()
 	defer b.sessionMu.Unlock()
-
 	if s, ok := b.sessions[id]; ok {
-		s.Connected = false
 		s.LastActivity = time.Now()
 	}
 }
@@ -549,41 +519,8 @@ func (b *Broker) AckSession(id string, seq uint64) error {
 	return nil
 }
 
-// Replay returns buffered entries from afterSeq+1 up to the current head,
-// filtered by the given EventFilter. Device-based filter criteria are resolved
-// to source addresses before taking the ring lock to avoid deadlocks.
-func (b *Broker) Replay(afterSeq uint64, filter *EventFilter) [][]byte {
-	// Pre-resolve device filters while we don't hold the ring lock.
-	resolved := filter.resolve(b.devices)
-
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	startSeq := max(afterSeq+1, b.tail)
-	if startSeq >= b.head {
-		return nil
-	}
-
-	count := int(b.head - startSeq)
-	result := make([][]byte, 0, count)
-
-	for seq := startSeq; seq < b.head; seq++ {
-		idx := seq & uint64(b.ringMask)
-		entry := b.ring[idx]
-		if entry.Seq != seq {
-			continue
-		}
-		if !resolved.matches(entry.Header) {
-			continue
-		}
-		result = append(result, entry.Data)
-	}
-
-	return result
-}
-
-// expireSessions removes sessions that have been disconnected
-// longer than their buffer timeout.
+// expireSessions removes sessions that have been inactive longer than
+// their buffer timeout.
 func (b *Broker) expireSessions() {
 	now := time.Now()
 
@@ -591,9 +528,8 @@ func (b *Broker) expireSessions() {
 	defer b.sessionMu.Unlock()
 
 	for id, s := range b.sessions {
-		if !s.Connected && now.Sub(s.LastActivity) > s.BufferTimeout {
+		if now.Sub(s.LastActivity) > s.BufferTimeout {
 			b.logger.Info("expiring client session", "client", id)
-			close(s.Ch)
 			delete(b.sessions, id)
 		}
 	}
@@ -627,6 +563,49 @@ func (b *Broker) CloseRx() {
 // SetJournal sets the journal channel. Must be called before Run.
 func (b *Broker) SetJournal(ch chan<- RxFrame) {
 	b.journal = ch
+}
+
+// notifyConsumers does a non-blocking send to each consumer's notify channel.
+func (b *Broker) notifyConsumers() {
+	b.consumerMu.RLock()
+	for c := range b.consumers {
+		select {
+		case c.notify <- struct{}{}:
+		default:
+		}
+	}
+	b.consumerMu.RUnlock()
+}
+
+// readEntry reads a single ring entry under RLock. Returns false if the seq
+// is no longer in the ring (overwritten).
+func (b *Broker) readEntry(seq uint64) (ringEntry, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	if seq < b.tail || seq >= b.head {
+		return ringEntry{}, false
+	}
+	idx := seq & uint64(b.ringMask)
+	entry := b.ring[idx]
+	if entry.Seq != seq {
+		return ringEntry{}, false
+	}
+	return entry, true
+}
+
+// ringRange returns the current ring bounds under RLock.
+func (b *Broker) ringRange() (tail, head uint64) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.tail, b.head
+}
+
+// removeConsumer removes a consumer from the registry.
+func (b *Broker) removeConsumer(c *Consumer) {
+	b.consumerMu.Lock()
+	delete(b.consumers, c)
+	b.consumerMu.Unlock()
 }
 
 // Devices returns the broker's device registry.

@@ -70,10 +70,11 @@ type JournalWriter struct {
 
 	// current block (buffered in memory)
 	block      []byte
-	dataOffset int    // write cursor for frame data (starts at 8)
+	dataOffset int    // write cursor for frame data (starts at 16 for v2)
 	frameCount uint32
-	baseTimeUs int64 // first frame's absolute time (unix microseconds)
-	lastTimeUs int64 // for delta encoding
+	baseTimeUs int64  // first frame's absolute time (unix microseconds)
+	lastTimeUs int64  // for delta encoding
+	baseSeq    uint64 // first frame's sequence number (v2)
 
 	// device tracking for current block
 	blockStartDevices         []journal.Device
@@ -194,12 +195,12 @@ func (w *JournalWriter) appendFrame(frame RxFrame) error {
 		if err := w.checkRotation(); err != nil {
 			return err
 		}
-		w.initBlock(tsUs)
+		w.initBlock(tsUs, frame.Seq)
 		deltaUs = 0
 	}
 
 	if w.frameCount == 0 {
-		w.initBlock(tsUs)
+		w.initBlock(tsUs, frame.Seq)
 	}
 
 	// Encode into block buffer
@@ -243,14 +244,16 @@ func (w *JournalWriter) appendFrame(frame RxFrame) error {
 	return nil
 }
 
-// initBlock sets up a fresh block at the given base time.
-func (w *JournalWriter) initBlock(baseTimeUs int64) {
+// initBlock sets up a fresh block at the given base time and sequence number.
+func (w *JournalWriter) initBlock(baseTimeUs int64, baseSeq uint64) {
 	clear(w.block)
-	w.dataOffset = 8
+	w.dataOffset = 16
 	w.frameCount = 0
 	w.baseTimeUs = baseTimeUs
 	w.lastTimeUs = baseTimeUs
+	w.baseSeq = baseSeq
 	binary.LittleEndian.PutUint64(w.block[0:8], uint64(baseTimeUs))
+	binary.LittleEndian.PutUint64(w.block[8:16], baseSeq)
 
 	w.blockStartDevices = w.blockStartDevices[:0]
 	tableSize := 0
@@ -366,12 +369,12 @@ func (w *JournalWriter) flushBlock() error {
 	w.fileBytes += int64(n)
 
 	w.frameCount = 0
-	w.dataOffset = 8
+	w.dataOffset = 16
 
 	return nil
 }
 
-// writeCompressedBlock writes a compressed block with its 12-byte header.
+// writeCompressedBlock writes a compressed block with its 20-byte v2 header.
 func (w *JournalWriter) writeCompressedBlock() error {
 	// Record the file offset before writing
 	w.blockOffsets = append(w.blockOffsets, w.fileBytes)
@@ -379,10 +382,11 @@ func (w *JournalWriter) writeCompressedBlock() error {
 	// Compress the full uncompressed block
 	w.compressBuf = w.zEncoder.EncodeAll(w.block, w.compressBuf[:0])
 
-	// Write 12-byte header: BaseTime(8) + CompressedLen(4)
-	var hdr [12]byte
+	// Write 20-byte header: BaseTime(8) + BaseSeq(8) + CompressedLen(4)
+	var hdr [20]byte
 	binary.LittleEndian.PutUint64(hdr[0:8], uint64(w.baseTimeUs))
-	binary.LittleEndian.PutUint32(hdr[8:12], uint32(len(w.compressBuf)))
+	binary.LittleEndian.PutUint64(hdr[8:16], w.baseSeq)
+	binary.LittleEndian.PutUint32(hdr[16:20], uint32(len(w.compressBuf)))
 
 	n, err := w.file.Write(hdr[:])
 	if err != nil {
@@ -397,7 +401,7 @@ func (w *JournalWriter) writeCompressedBlock() error {
 	w.fileBytes += int64(n)
 
 	w.frameCount = 0
-	w.dataOffset = 8
+	w.dataOffset = 16
 
 	return nil
 }
@@ -440,11 +444,12 @@ func (w *JournalWriter) writeDictCompressedBlock() error {
 		w.compressBuf = w.zEncoder.EncodeAll(w.block, w.compressBuf[:0])
 	}
 
-	// Write 16-byte header: BaseTime(8) + DictLen(4) + CompressedLen(4)
-	var hdr [16]byte
+	// Write 24-byte header: BaseTime(8) + BaseSeq(8) + DictLen(4) + CompressedLen(4)
+	var hdr [24]byte
 	binary.LittleEndian.PutUint64(hdr[0:8], uint64(w.baseTimeUs))
-	binary.LittleEndian.PutUint32(hdr[8:12], uint32(len(dictBytes)))
-	binary.LittleEndian.PutUint32(hdr[12:16], uint32(len(w.compressBuf)))
+	binary.LittleEndian.PutUint64(hdr[8:16], w.baseSeq)
+	binary.LittleEndian.PutUint32(hdr[16:20], uint32(len(dictBytes)))
+	binary.LittleEndian.PutUint32(hdr[20:24], uint32(len(w.compressBuf)))
 
 	n, err := w.file.Write(hdr[:])
 	if err != nil {
@@ -467,7 +472,7 @@ func (w *JournalWriter) writeDictCompressedBlock() error {
 	w.fileBytes += int64(n)
 
 	w.frameCount = 0
-	w.dataOffset = 8
+	w.dataOffset = 16
 
 	return nil
 }
@@ -569,7 +574,7 @@ func (w *JournalWriter) openFile(ts time.Time) error {
 
 	var hdr [16]byte
 	copy(hdr[0:3], journal.Magic[:])
-	hdr[3] = journal.Version
+	hdr[3] = journal.Version2
 	binary.LittleEndian.PutUint32(hdr[4:8], uint32(w.cfg.BlockSize))
 	binary.LittleEndian.PutUint32(hdr[8:12], uint32(w.cfg.Compression))
 
