@@ -44,6 +44,9 @@ go get github.com/sixfathoms/lplex/lplexc@latest
 # Start the server (requires SocketCAN interface)
 lplex -interface can0 -port 8089
 
+# With a config file
+lplex -config /etc/lplex/lplex.conf
+
 # With journal recording enabled
 lplex -interface can0 -port 8089 -journal-dir /var/log/lplex
 
@@ -91,6 +94,41 @@ for {
     fmt.Printf("Position: src=%d data=%s\n", ev.Frame.Src, ev.Frame.Data)
 }
 ```
+
+## Configuration
+
+lplex can be configured with CLI flags, a [HOCON](https://github.com/lightbend/config/blob/main/HOCON.md) config file, or both. CLI flags always take precedence over config file values.
+
+### Config file discovery
+
+Use `-config path/to/lplex.conf` to specify a config file explicitly. If `-config` is not set, lplex searches for:
+
+1. `./lplex.conf`
+2. `/etc/lplex/lplex.conf`
+
+If no config file is found, lplex continues with defaults (fully backward compatible).
+
+### Example config
+
+```hocon
+interface = can0
+port = 8089
+max-buffer-duration = PT5M
+
+journal {
+  dir = /var/log/lplex
+  prefix = nmea2k
+  block-size = 262144
+  compression = zstd
+
+  rotate {
+    duration = PT1H
+    size = 0
+  }
+}
+```
+
+See [`lplex.conf.example`](lplex.conf.example) for the full annotated version.
 
 ## Architecture
 
@@ -187,9 +225,15 @@ Blocks are compressed individually with zstd (~4x ratio at 256KB blocks on typic
 
 ## Deployment
 
-The `.deb` package installs a systemd service that binds to `can0`. Configure via `/etc/default/lplex`:
+The `.deb` package installs a systemd service that binds to `can0`. Configure with a config file or environment variable:
 
 ```bash
+# Option 1: config file (recommended)
+sudo cp lplex.conf.example /etc/lplex/lplex.conf
+sudo vi /etc/lplex/lplex.conf
+
+# Option 2: environment variable
+# Edit /etc/default/lplex:
 LPLEX_ARGS="-interface can0 -port 8089 -journal-dir /var/log/lplex -journal-compression zstd"
 ```
 

@@ -34,7 +34,7 @@ git tag -a v0.2.0 -m "v0.2.0" && git push origin v0.2.0
 - **Host**: `inuc1.local` (Linux x86_64)
 - **Install**: `.deb` package from GitHub Releases
 - **Service**: `lplex.service` (systemd)
-- **Config**: `/etc/default/lplex` (`LPLEX_ARGS="-interface can0 -port 8089"`)
+- **Config**: `/etc/lplex/lplex.conf` (HOCON) or `/etc/default/lplex` (`LPLEX_ARGS="-interface can0 -port 8089"`)
 - **CAN interface**: `can0`
 - **HTTP port**: 8089
 
@@ -86,7 +86,7 @@ CANWriter goroutine
 
 | Package | Owns |
 |---|---|
-| `cmd/lplex/` | Server entry point, flag parsing, wires broker + CAN reader/writer + HTTP server |
+| `cmd/lplex/` | Server entry point, flag parsing, HOCON config file loading, wires broker + CAN reader/writer + HTTP server |
 | `cmd/lplexdump/` | CLI client: SSE consumer with pretty-print, device table, auto-reconnect |
 | `lplexc/` | Public Go client library: Subscribe, Devices, Send, Session, mDNS discovery |
 | `canbus/` | Public CAN ID parsing (`CANHeader`, `ParseCANID`, `BuildCANID`) and ISO NAME decoding |
@@ -143,8 +143,13 @@ lplexdump -server http://inuc1.local:8089 -buffer-timeout PT5M
 - All data encodings follow NMEA 2000: little-endian, 0xFF padding, fast-packet protocol
 - Sequence numbers start at 1 (0 means "never ACK'd")
 
+## Configuration
+
+lplex supports HOCON config files (`-config path` or auto-discovered from `./lplex.conf`, `/etc/lplex/lplex.conf`). CLI flags always override config file values (detected via `flag.Visit()`). Config values are applied through `flag.Set()` so they share the same parsing path as CLI flags. The mapping from HOCON paths to flag names lives in `configToFlag` in `cmd/lplex/config.go`.
+
 ## Dependencies
 
 - `go.einride.tech/can` - SocketCAN bindings
 - `github.com/grandcat/zeroconf` - mDNS service discovery
 - `github.com/klauspost/compress` - zstd compression for journal blocks
+- `github.com/gurkankaymak/hocon` - HOCON config file parser

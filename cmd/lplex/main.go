@@ -34,6 +34,7 @@ func main() {
 	journalRotateDur := flag.String("journal-rotate-duration", "PT1H", "Rotate journal after duration (ISO 8601, e.g. PT1H)")
 	journalRotateSize := flag.Int64("journal-rotate-size", 0, "Rotate journal after bytes (0 = disabled)")
 	journalCompression := flag.String("journal-compression", "zstd", "Journal compression: none, zstd, zstd-dict")
+	configFile := flag.String("config", "", "Path to HOCON config file (default: ./lplex.conf, /etc/lplex/lplex.conf)")
 	flag.Parse()
 
 	if *showVersion {
@@ -41,7 +42,23 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Load HOCON config file (CLI flags take precedence).
+	cfgPath, err := findConfigFile(*configFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if cfgPath != "" {
+		if err := applyConfig(cfgPath); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if cfgPath != "" {
+		logger.Info("loaded config", "path", cfgPath)
+	}
 
 	bufDuration, err := server.ParseISO8601Duration(*maxBufDur)
 	if err != nil {
