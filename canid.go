@@ -1,5 +1,5 @@
-// Package server implements lplex, a CAN bus HTTP bridge for NMEA 2000.
-package server
+
+package lplex
 
 import "github.com/sixfathoms/lplex/canbus"
 

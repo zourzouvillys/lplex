@@ -95,8 +95,10 @@ dockers_v2:
     extra_files:
       - go.mod
       - go.sum
+      - "*.go"
       - cmd/
-      - internal/
+      - canbus/
+      - journal/
       - lplexc/
 
 changelog:

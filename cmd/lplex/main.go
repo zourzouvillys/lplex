@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/grandcat/zeroconf"
-	"github.com/sixfathoms/lplex/internal/server"
+	"github.com/sixfathoms/lplex"
 	"github.com/sixfathoms/lplex/journal"
 )
 
@@ -60,19 +60,19 @@ func main() {
 		logger.Info("loaded config", "path", cfgPath)
 	}
 
-	bufDuration, err := server.ParseISO8601Duration(*maxBufDur)
+	bufDuration, err := lplex.ParseISO8601Duration(*maxBufDur)
 	if err != nil {
 		logger.Error("invalid max-buffer-duration", "value", *maxBufDur, "error", err)
 		os.Exit(1)
 	}
 
-	broker := server.NewBroker(server.BrokerConfig{
+	broker := lplex.NewBroker(lplex.BrokerConfig{
 		RingSize:          65536,
 		MaxBufferDuration: bufDuration,
 		Logger:            logger,
 	})
 
-	srv := server.NewServer(broker, logger)
+	srv := lplex.NewServer(broker, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -83,11 +83,11 @@ func main() {
 	var wg sync.WaitGroup
 
 	// Set up journal writer if configured
-	var journalCh chan server.RxFrame
+	var journalCh chan lplex.RxFrame
 	if *journalDir != "" {
 		var rotateDur time.Duration
 		if *journalRotateDur != "" {
-			rotateDur, err = server.ParseISO8601Duration(*journalRotateDur)
+			rotateDur, err = lplex.ParseISO8601Duration(*journalRotateDur)
 			if err != nil {
 				logger.Error("invalid journal-rotate-duration", "value", *journalRotateDur, "error", err)
 				os.Exit(1)
@@ -107,10 +107,10 @@ func main() {
 			os.Exit(1)
 		}
 
-		journalCh = make(chan server.RxFrame, 16384)
+		journalCh = make(chan lplex.RxFrame, 16384)
 		broker.SetJournal(journalCh)
 
-		jw, err := server.NewJournalWriter(server.JournalConfig{
+		jw, err := lplex.NewJournalWriter(lplex.JournalConfig{
 			Dir:            *journalDir,
 			Prefix:         *journalPrefix,
 			BlockSize:      *journalBlockSize,
@@ -139,7 +139,7 @@ func main() {
 	go broker.Run()
 
 	go func() {
-		if err := server.CANReader(ctx, *iface, broker.RxFrames(), logger); err != nil {
+		if err := lplex.CANReader(ctx, *iface, broker.RxFrames(), logger); err != nil {
 			if ctx.Err() == nil {
 				logger.Error("CAN reader failed", "error", err)
 				cancel()
@@ -148,7 +148,7 @@ func main() {
 	}()
 
 	go func() {
-		if err := server.CANWriter(ctx, *iface, broker.TxFrames(), logger); err != nil {
+		if err := lplex.CANWriter(ctx, *iface, broker.TxFrames(), logger); err != nil {
 			if ctx.Err() == nil {
 				logger.Error("CAN writer failed", "error", err)
 				cancel()

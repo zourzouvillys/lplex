@@ -86,14 +86,14 @@ CANWriter goroutine
 
 | Package | Owns |
 |---|---|
-| `cmd/lplex/` | Server entry point, flag parsing, HOCON config file loading, wires broker + CAN reader/writer + HTTP server |
+| `lplex` (root) | Public core: `Broker`, `Server`, `CANReader`, `CANWriter`, `JournalWriter`, `DeviceRegistry`, `FastPacketAssembler`, filters, ring buffer. Embeddable by external Go services. |
+| `cmd/lplex/` | Standalone server: flag parsing, HOCON config, signal handling, mDNS registration, wires broker + CAN I/O + HTTP |
 | `cmd/lplexdump/` | CLI client: SSE consumer with pretty-print, device table, auto-reconnect |
 | `lplexc/` | Public Go client library: Subscribe, Devices, Send, Session, mDNS discovery |
 | `canbus/` | Public CAN ID parsing (`CANHeader`, `ParseCANID`, `BuildCANID`) and ISO NAME decoding |
 | `journal/` | Public journal format: `Device`, `Reader`, `CompressionType`, block constants, length-prefixed string helpers |
-| `internal/server/` | Server internals (not importable externally) |
 
-### internal/server/ File Map
+### Root Package File Map
 
 | File | Owns |
 |---|---|
@@ -103,7 +103,8 @@ CANWriter goroutine
 | `canid.go` | Thin wrappers re-exporting `canbus.ParseCANID`, `canbus.BuildCANID` |
 | `fastpacket.go` | `FastPacketAssembler`, `FragmentFastPacket`, fast-packet PGN registry |
 | `devices.go` | `DeviceRegistry`, PGN 60928/126996 decoding, manufacturer lookup table |
-| `journal.go` | `JournalWriter`, `JournalConfig`, block encoding, zstd compression, block index, file rotation, device table tracking (with product info) |
+| `journal_writer.go` | `JournalWriter`, `JournalConfig`, block encoding, zstd compression, block index, file rotation, device table tracking (with product info) |
+| `doc.go` | Package documentation with embedding example |
 
 ## Client Modes
 

@@ -36,6 +36,61 @@ Download `.deb` packages from [GitHub Releases](https://github.com/sixfathoms/lp
 go get github.com/sixfathoms/lplex/lplexc@latest
 ```
 
+### Embedding lplex
+
+The core package is importable, so you can embed lplex into your own service:
+
+```bash
+go get github.com/sixfathoms/lplex@latest
+```
+
+```go
+import (
+    "log/slog"
+    "net/http"
+    "time"
+
+    "github.com/sixfathoms/lplex"
+)
+
+func main() {
+    logger := slog.Default()
+
+    // Create the broker (owns ring buffer, device registry, fan-out).
+    broker := lplex.NewBroker(lplex.BrokerConfig{
+        RingSize:          65536,
+        MaxBufferDuration: 5 * time.Minute,
+        Logger:            logger,
+    })
+    go broker.Run()
+
+    // Mount the HTTP handler on a sub-path.
+    srv := lplex.NewServer(broker, logger)
+    mux := http.NewServeMux()
+    mux.Handle("/nmea/", http.StripPrefix("/nmea", srv))
+
+    // Feed frames from your own CAN source.
+    go func() {
+        for frame := range myFrameSource() {
+            broker.RxFrames() <- lplex.RxFrame{
+                Timestamp: frame.Time,
+                Header:    lplex.CANHeader{Priority: 2, PGN: frame.PGN, Source: frame.Src, Destination: 0xFF},
+                Data:      frame.Data,
+            }
+        }
+    }()
+
+    // Optional: enable journal recording.
+    journalCh := make(chan lplex.RxFrame, 16384)
+    broker.SetJournal(journalCh)
+    // ... create JournalWriter and call Run in a goroutine.
+
+    http.ListenAndServe(":8080", mux)
+}
+```
+
+Lifecycle: the broker goroutine exits when you call `broker.CloseRx()`. Close the journal channel after that, then wait for the journal writer to finish.
+
 ## Quick Start
 
 ### Server
