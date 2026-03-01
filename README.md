@@ -14,7 +14,7 @@ brew install sixfathoms/tap/lplexdump
 go install github.com/sixfathoms/lplex/cmd/lplexdump@latest
 ```
 
-### Server
+### Server (Linux only, requires SocketCAN)
 
 ```bash
 # Debian/Ubuntu (.deb includes both lplex server and lplexdump)
@@ -29,6 +29,12 @@ go install github.com/sixfathoms/lplex/cmd/lplex@latest
 ```
 
 Download `.deb` packages from [GitHub Releases](https://github.com/sixfathoms/lplex/releases).
+
+### Go Client Library
+
+```bash
+go get github.com/sixfathoms/lplex/lplexc@latest
+```
 
 ## Quick Start
 
@@ -55,7 +61,7 @@ lplexdump -server http://inuc1.local:8089 -pgn 129025 -manufacturer Garmin
 lplexdump -server http://inuc1.local:8089 -buffer-timeout PT5M
 ```
 
-### Go Client Library
+### Go Client Library (`lplexc`)
 
 ```go
 import "github.com/sixfathoms/lplex/lplexc"

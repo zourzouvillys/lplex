@@ -5,29 +5,36 @@ CAN bus HTTP bridge for NMEA 2000. Reads raw CAN frames from a SocketCAN interfa
 ## Build & Test
 
 ```bash
-go build ./...                                            # build all
-go build -o lplex ./cmd/lplex                             # build server
-go build -o lplexdump ./cmd/lplexdump                     # build CLI client
-go test ./... -v -count=1                                 # run tests
-
-# cross-compile and deploy to inuc1
-GOOS=linux GOARCH=amd64 go build -o lplex-linux-amd64 ./cmd/lplex
-scp lplex-linux-amd64 inuc1.local:/usr/bin/lplex.new
-ssh inuc1.local "mv /usr/bin/lplex.new /usr/bin/lplex && sudo systemctl restart lplex"
+go build ./...                  # build all
+go build -o lplex ./cmd/lplex   # build server
+go build -o lplexdump ./cmd/lplexdump
+go test ./... -v -count=1       # run tests
 ```
 
 ## Release
 
+Tags trigger GoReleaser via GitHub Actions, which builds binaries, .deb, Docker images, and pushes the Homebrew formula.
+
 ```bash
-git tag v0.1.0 && git push origin v0.1.0   # triggers goreleaser via GitHub Actions
+git tag -a v0.2.0 -m "v0.2.0" && git push origin v0.2.0
 ```
+
+**Release artifacts**:
+- `lplex` server: Linux amd64/arm64 only (no macOS, needs SocketCAN)
+- `lplexdump` client: Linux + macOS (amd64/arm64)
+- `.deb` package: bundles both binaries + systemd unit
+- Docker: `ghcr.io/sixfathoms/lplex` (linux/amd64 + linux/arm64)
+- Homebrew: `sixfathoms/tap/lplexdump` (client only, pushed to `sixfathoms/homebrew-tap`)
+
+**Secrets**: `HOMEBREW_TAP_TOKEN` (fine-grained PAT with Contents read/write on `sixfathoms/homebrew-tap`)
 
 ## Deployment
 
 - **Host**: `inuc1.local` (Linux x86_64)
-- **Binary**: `/usr/bin/lplex` (installed via `.deb` or manual copy)
-- **Service**: `lplex.service` (systemd, runs as `theo`)
-- **CAN interface**: `can0` (service binds to `sys-subsystem-net-devices-can0.device`)
+- **Install**: `.deb` package from GitHub Releases
+- **Service**: `lplex.service` (systemd)
+- **Config**: `/etc/default/lplex` (`LPLEX_ARGS="-interface can0 -port 8089"`)
+- **CAN interface**: `can0`
 - **HTTP port**: 8089
 
 ## Architecture
