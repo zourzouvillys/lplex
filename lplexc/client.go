@@ -38,7 +38,7 @@ func (c *Client) Devices(ctx context.Context) ([]Device, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -74,7 +74,7 @@ func (c *Client) Subscribe(ctx context.Context, filter *Filter) (*Subscription, 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("GET /events returned %d: %s", resp.StatusCode, body)
 	}
 
@@ -112,7 +112,7 @@ func (c *Client) Send(ctx context.Context, pgn uint32, src, dst, prio uint8, dat
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusAccepted {
 		return fmt.Errorf("POST /send returned %d", resp.StatusCode)

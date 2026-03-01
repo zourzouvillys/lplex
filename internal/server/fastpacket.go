@@ -216,7 +216,7 @@ func FragmentFastPacket(data []byte, seqCounter uint8) [][]byte {
 
 	// Frame 0: [seq|0] [totalLen] [up to 6 data bytes]
 	frame0 := make([]byte, 8)
-	frame0[0] = seqBits | 0x00
+	frame0[0] = seqBits
 	frame0[1] = byte(totalLen)
 	n := copy(frame0[2:], data)
 	frames = append(frames, frame0)

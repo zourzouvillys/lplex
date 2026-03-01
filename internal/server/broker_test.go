@@ -257,7 +257,9 @@ func TestBrokerDeviceDiscovery(t *testing.T) {
 	case data := <-session.Ch:
 		// Should get a device event
 		var raw map[string]any
-		json.Unmarshal(data, &raw)
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatalf("unmarshal device event: %v", err)
+		}
 		if raw["type"] == "device" {
 			// Good, got device event
 			if raw["manufacturer"] != "Garmin" {
@@ -336,7 +338,9 @@ func TestBrokerRingOverwrite(t *testing.T) {
 	}
 
 	var first frameJSON
-	json.Unmarshal(entries[0], &first)
+	if err := json.Unmarshal(entries[0], &first); err != nil {
+		t.Fatalf("unmarshal entry: %v", err)
+	}
 	if first.Seq != 17 {
 		t.Errorf("first entry after overwrite: seq got %d, want 17", first.Seq)
 	}
@@ -482,7 +486,9 @@ func TestBrokerFilterByPGN(t *testing.T) {
 	select {
 	case data := <-session.Ch:
 		var msg frameJSON
-		json.Unmarshal(data, &msg)
+		if err := json.Unmarshal(data, &msg); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
 		if msg.PGN != 129025 {
 			t.Errorf("expected PGN 129025, got %d", msg.PGN)
 		}
@@ -493,7 +499,7 @@ func TestBrokerFilterByPGN(t *testing.T) {
 	select {
 	case data := <-session.Ch:
 		var msg frameJSON
-		json.Unmarshal(data, &msg)
+		_ = json.Unmarshal(data, &msg)
 		t.Errorf("should not receive PGN %d, filter is [129025]", msg.PGN)
 	case <-time.After(100 * time.Millisecond):
 		// good
@@ -522,7 +528,7 @@ func TestBrokerFilterByManufacturer(t *testing.T) {
 	select {
 	case data := <-session.Ch:
 		var msg frameJSON
-		json.Unmarshal(data, &msg)
+		_ = json.Unmarshal(data, &msg)
 		if msg.Src != 5 {
 			t.Errorf("expected src 5 (Garmin), got %d", msg.Src)
 		}
@@ -538,7 +544,7 @@ func TestBrokerFilterByManufacturer(t *testing.T) {
 	select {
 	case data := <-session.Ch:
 		var msg frameJSON
-		json.Unmarshal(data, &msg)
+		_ = json.Unmarshal(data, &msg)
 		// Might be a device event from address claim of src 10 (which
 		// won't have "type" field, so it's a frame), or an actual frame.
 		if msg.Src == 10 && msg.PGN == 129025 {
@@ -571,7 +577,7 @@ func TestBrokerFilterByManufacturerCode(t *testing.T) {
 	select {
 	case data := <-session.Ch:
 		var msg frameJSON
-		json.Unmarshal(data, &msg)
+		_ = json.Unmarshal(data, &msg)
 		if msg.Src != 5 {
 			t.Errorf("expected src 5 (Garmin/229), got %d", msg.Src)
 		}
@@ -582,7 +588,7 @@ func TestBrokerFilterByManufacturerCode(t *testing.T) {
 	select {
 	case data := <-session.Ch:
 		var msg frameJSON
-		json.Unmarshal(data, &msg)
+		_ = json.Unmarshal(data, &msg)
 		if msg.Src == 7 {
 			t.Error("should not receive frames from Victron when filtering by code 229")
 		}
@@ -611,7 +617,7 @@ func TestBrokerFilterByInstance(t *testing.T) {
 	select {
 	case data := <-session.Ch:
 		var msg frameJSON
-		json.Unmarshal(data, &msg)
+		_ = json.Unmarshal(data, &msg)
 		if msg.Src != 3 {
 			t.Errorf("expected src 3, got %d", msg.Src)
 		}
@@ -651,7 +657,7 @@ func TestBrokerFilterCombined(t *testing.T) {
 		select {
 		case data := <-session.Ch:
 			var msg frameJSON
-			json.Unmarshal(data, &msg)
+			_ = json.Unmarshal(data, &msg)
 			received = append(received, msg)
 		case <-time.After(100 * time.Millisecond):
 			goto done
@@ -695,7 +701,7 @@ func TestBrokerReplayWithFilter(t *testing.T) {
 
 	for _, data := range entries {
 		var msg frameJSON
-		json.Unmarshal(data, &msg)
+		_ = json.Unmarshal(data, &msg)
 		if msg.PGN != 129025 {
 			t.Errorf("replay should only contain PGN 129025, got %d", msg.PGN)
 		}
@@ -802,7 +808,7 @@ func TestBrokerDeviceEventsBypassFilter(t *testing.T) {
 		select {
 		case data := <-session.Ch:
 			var raw map[string]any
-			json.Unmarshal(data, &raw)
+			_ = json.Unmarshal(data, &raw)
 			if raw["type"] == "device" {
 				gotDevice = true
 			}
@@ -925,7 +931,7 @@ func TestBrokerSubscriberReceivesDeviceEvents(t *testing.T) {
 		select {
 		case data := <-sub.ch:
 			var raw map[string]any
-			json.Unmarshal(data, &raw)
+			_ = json.Unmarshal(data, &raw)
 			if raw["type"] == "device" {
 				gotDevice = true
 			}

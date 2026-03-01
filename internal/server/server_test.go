@@ -355,7 +355,7 @@ func TestSSEReplay(t *testing.T) {
 			line := scanner.Text()
 			if strings.HasPrefix(line, "data: ") {
 				var msg frameJSON
-				json.Unmarshal([]byte(line[6:]), &msg)
+				_ = json.Unmarshal([]byte(line[6:]), &msg)
 				if msg.Seq > 0 {
 					seqs = append(seqs, msg.Seq)
 					if len(seqs) >= 5 {
@@ -394,7 +394,9 @@ func TestCreateSessionWithFilter(t *testing.T) {
 	var resp struct {
 		ClientID string `json:"client_id"`
 	}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if resp.ClientID != "filtered" {
 		t.Errorf("client_id: got %q, want %q", resp.ClientID, "filtered")
 	}

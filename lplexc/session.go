@@ -56,7 +56,7 @@ func (c *Client) CreateSession(ctx context.Context, cfg SessionConfig) (*Session
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		errBody, _ := io.ReadAll(resp.Body)
@@ -98,7 +98,7 @@ func (s *Session) Subscribe(ctx context.Context) (*Subscription, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("GET /clients/%s/events returned %d: %s", s.config.ClientID, resp.StatusCode, body)
 	}
 
@@ -120,7 +120,7 @@ func (s *Session) Ack(ctx context.Context, seq uint64) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("ack returned %d", resp.StatusCode)
