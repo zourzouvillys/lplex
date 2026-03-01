@@ -69,7 +69,7 @@ Broker goroutine (single writer, owns all state)
     v
 HTTP Server (:8089)                    JournalWriter goroutine
     |                                       |  reads from journal chan
-    +-- GET  /events                        |  encodes frames into 64KB blocks
+    +-- GET  /events                        |  encodes frames into 256KB blocks
     +-- PUT  /clients/{id}                  |  writes blocks with CRC32C checksums
     +-- GET  /clients/{id}/events           |  rotates files by duration/size
     +-- PUT  /clients/{id}/ack              |  tracks device table per block
@@ -90,7 +90,7 @@ CANWriter goroutine
 | `cmd/lplexdump/` | CLI client: SSE consumer with pretty-print, device table, auto-reconnect |
 | `lplexc/` | Public Go client library: Subscribe, Devices, Send, Session, mDNS discovery |
 | `canbus/` | Public CAN ID parsing (`CANHeader`, `ParseCANID`, `BuildCANID`) and ISO NAME decoding |
-| `journal/` | Public journal format: `Device`, `Reader`, block constants, length-prefixed string helpers |
+| `journal/` | Public journal format: `Device`, `Reader`, `CompressionType`, block constants, length-prefixed string helpers |
 | `internal/server/` | Server internals (not importable externally) |
 
 ### internal/server/ File Map
@@ -103,7 +103,7 @@ CANWriter goroutine
 | `canid.go` | Thin wrappers re-exporting `canbus.ParseCANID`, `canbus.BuildCANID` |
 | `fastpacket.go` | `FastPacketAssembler`, `FragmentFastPacket`, fast-packet PGN registry |
 | `devices.go` | `DeviceRegistry`, PGN 60928/126996 decoding, manufacturer lookup table |
-| `journal.go` | `JournalWriter`, `JournalConfig`, block encoding, file rotation, device table tracking (with product info) |
+| `journal.go` | `JournalWriter`, `JournalConfig`, block encoding, zstd compression, block index, file rotation, device table tracking (with product info) |
 
 ## Client Modes
 
@@ -132,6 +132,7 @@ lplexdump -server http://inuc1.local:8089 -buffer-timeout PT5M
 - **Ephemeral subscribers are separate from sessions**: clean separation, no lifecycle overhead.
 - **ISO Request on unknown source**: broker discovers devices automatically.
 - **Journal at broker level**: records reassembled frames (not raw CAN fragments), tapped via non-blocking channel send after fan-out. See `docs/format.md` for the `.lpj` binary format spec.
+- **Block-level zstd compression**: journal blocks are compressed individually with zstd (default enabled, ~4x ratio at 256KB blocks). Each compressed block has a 12-byte header (BaseTime + CompressedLen). A block index at EOF provides O(1) offset lookup; forward-scan fallback handles crash-truncated files.
 
 ## Conventions
 
@@ -146,3 +147,4 @@ lplexdump -server http://inuc1.local:8089 -buffer-timeout PT5M
 
 - `go.einride.tech/can` - SocketCAN bindings
 - `github.com/grandcat/zeroconf` - mDNS service discovery
+- `github.com/klauspost/compress` - zstd compression for journal blocks

@@ -7,7 +7,7 @@
 
  Key Design Decisions
 
- Block-based format. Fixed-size blocks (default 64KB). Each block has an absolute timestamp header, packed frame data, a device table, and a CRC32C-checked trailer. No record type tags.
+ Block-based format. Fixed-size blocks (default 256KB). Each block has an absolute timestamp header, packed frame data, a device table, and a CRC32C-checked trailer. No record type tags.
 
  Standard-length flag in CANID. The 29-bit CAN ID occupies bits 0-28 of a uint32, leaving bits 29-31 spare. Bit 31 = 1 means "data is exactly 8 bytes, no DataLen field." This eliminates the 1-byte DataLen varint on ~90-95% of frames (all standard
  single-frame PGNs). Only reassembled fast-packets and rare short frames need the extended format.
@@ -17,8 +17,9 @@
 
  Record reassembled frames, not raw CAN fragments. Zero changes to CANReader. Tap at broker level.
 
- Separate goroutine with batched block writes. Frames buffered in memory, written as complete blocks. 16384-entry channel between broker and writer. On crash, up to one block (~20s at 200fps with 64KB blocks) lost; all completed blocks intact with
- checksums.
+ Separate goroutine with batched block writes. Frames buffered in memory, written as complete blocks. 16384-entry channel between broker and writer. On crash, up to one block lost; all completed blocks intact with checksums.
+
+ Block-level compression. Optional zstd compression at the block level. Each block is built in memory identically to the uncompressed format, then compressed as a unit before writing. CRC is over the uncompressed data, validated after decompression. A block index at end of file enables O(1) seeking; if missing (crash), the reader forward-scans compressed block headers.
 
  Binary Format
 
@@ -27,11 +28,16 @@
  Offset  Size  Field
  0       3     Magic: "LPJ" (0x4C 0x50 0x4A)
  3       1     Version: 0x01
- 4       4     BlockSize: uint32 LE (bytes, power of 2, default 65536, min 4096)
- 8       4     Flags: uint32 LE (reserved, 0)
+ 4       4     BlockSize: uint32 LE (bytes, power of 2, default 262144, min 4096)
+ 8       4     Flags: uint32 LE, bits 0-7 = CompressionType (0=none, 1=zstd, 2=zstd+dict)
  12      4     Reserved: uint32 LE (0)
 
- Block Layout (BlockSize bytes)
+ CompressionType values:
+   0 = none (uncompressed, fixed-size blocks)
+   1 = zstd (compressed, variable-size blocks with block index)
+   2 = zstd+dict (per-block dictionary compressed, variable-size blocks with block index)
+
+ Uncompressed Block Layout (CompressionType=0, BlockSize bytes)
 
  ┌──────────────────────────────────────────────────────────┐
  │ +0       BaseTime (8 bytes, int64 LE)                    │  Unix microseconds, first frame
@@ -54,6 +60,61 @@
  │          FrameCount: uint32 LE                           │
  │          Checksum: uint32 LE (CRC32C of [0..BlockSize-4))│
  └──────────────────────────────────────────────────────────┘
+
+ Compressed Block Layout (CompressionType>0)
+
+ Each compressed block is preceded by a 12-byte header, followed by the compressed payload:
+
+ ┌──────────────────────────────────────────────────────────┐
+ │ Block Header (12 bytes)                                  │
+ │   BaseTime:       int64 LE (8 bytes, unix microseconds)  │  Duplicated from block, enables seeking
+ │   CompressedLen:  uint32 LE (4 bytes)                    │  without decompression
+ ├──────────────────────────────────────────────────────────┤
+ │ CompressedData (CompressedLen bytes)                     │
+ │   zstd-compressed full block (decompresses to BlockSize) │
+ └──────────────────────────────────────────────────────────┘
+
+ The decompressed block has the exact same layout as an uncompressed block (BaseTime, frame data, device table, CRC32C trailer). CRC is computed on uncompressed data and validated after decompression.
+
+ Dictionary Compressed Block Layout (CompressionType=2)
+
+ Each block carries its own zstd dictionary, making it independently decompressible with zero external state.
+
+ ┌──────────────────────────────────────────────────────────┐
+ │ Block Header (16 bytes)                                  │
+ │   BaseTime:       int64 LE (8 bytes, unix microseconds)  │
+ │   DictLen:        uint32 LE (4 bytes, dictionary size)   │
+ │   CompressedLen:  uint32 LE (4 bytes, payload size)      │
+ ├──────────────────────────────────────────────────────────┤
+ │ DictData (DictLen bytes)                                 │
+ │   zstd dictionary trained from this block's data         │
+ ├──────────────────────────────────────────────────────────┤
+ │ CompressedData (CompressedLen bytes)                     │
+ │   zstd-compressed full block using DictData              │
+ │   (decompresses to BlockSize)                            │
+ └──────────────────────────────────────────────────────────┘
+
+ Total on-disk block size: 16 + DictLen + CompressedLen.
+
+ Dictionary Training: for each block the writer splits the uncompressed data into overlapping 256-byte samples, extracts an 8KB history from the frame data region, and calls zstd.BuildDict. The resulting dictionary (~8KB) provides pre-built entropy tables and match references tuned to the block's content. Even though the dictionary is trained from the same data it compresses, the entropy tables and backreferences provide a meaningful compression improvement on the highly repetitive CAN bus data.
+
+ Forward scan for type 2: read 16-byte header, extract DictLen and CompressedLen, skip DictLen + CompressedLen bytes to find the next block.
+
+ Block Index (appended at file close, compressed files only)
+
+ ┌──────────────────────────────────────────────────────────┐
+ │ Offset[0]:  uint64 LE (file offset of block 0)          │
+ │ Offset[1]:  uint64 LE                                   │
+ │ ...                                                     │
+ │ Offset[N-1]: uint64 LE                                  │
+ ├──────────────────────────────────────────────────────────┤
+ │ Count:  uint32 LE (number of blocks)                    │
+ │ Magic:  "LPJI" (4 bytes)                                │
+ └──────────────────────────────────────────────────────────┘
+
+ Total overhead: Count * 8 + 8 bytes. For 150 blocks/hour: 1208 bytes.
+
+ To read: seek to EOF-8, read Count(4) + Magic(4). If Magic == "LPJI", seek to EOF - 8 - Count*8 and read the offset table. If no valid magic (crash, truncation), fall back to forward-scanning through block headers.
 
  Frame Encoding
 
@@ -116,20 +177,31 @@
 
  Seeking
 
+ Uncompressed (CompressionType=0):
  1. Block count = (fileSize - 16) / BlockSize
  2. Binary search: read int64 LE at offset 16 + mid * BlockSize
  3. Find block where BaseTime <= target < nextBlock.BaseTime
  4. Read device table via DeviceTableOffset for instant device context
  5. Parse frames within block to find exact position
-
  O(log N) reads. 1-hour file: ~190 blocks, ~8 search steps.
+
+ Compressed (CompressionType>0):
+ 1. Read block index from EOF (or forward-scan if missing)
+ 2. Binary search in-memory BaseTime array (zero I/O)
+ 3. Seek to block offset, read + decompress block
+ 4. Parse frames within decompressed block
+ O(log N) in-memory comparison + 1 read + 1 decompress.
 
  Size Estimates
 
- At 200 fps, ~95% standard-length frames:
+ Uncompressed at 200 fps, ~95% standard-length frames:
  - Standard: 13 bytes * 190 frames/sec = 2470 B/s
  - Extended: 18 bytes avg * 10 frames/sec = 180 B/s
  - Total: ~2.7 KB/s = ~9.5 MB/hour
+
+ With zstd compression (~4x ratio at 256KB blocks on CAN data):
+ - ~2.4 MB/hour
+ - Block index overhead: ~600 bytes/hour (negligible)
 
  Device table: ~1000-1600 bytes per block (20 devices with product info, ~50-80 bytes/entry). Block overhead still negligible relative to frame data.
 
@@ -140,6 +212,6 @@
  - Size: total bytes written (default: 0, disabled)
  - Count: total frame records (default: 0, disabled)
 
- Rotation: finalize block → sync → close file → open new file → write header.
+ Rotation: finalize block → write block index (compressed only) → sync → close file → open new file → write header.
 
  File naming: {dir}/{prefix}-{YYYYMMDD}T{HHMMSS.sss}Z.lpj

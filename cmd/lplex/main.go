@@ -14,6 +14,7 @@ import (
 
 	"github.com/grandcat/zeroconf"
 	"github.com/sixfathoms/lplex/internal/server"
+	"github.com/sixfathoms/lplex/journal"
 )
 
 var (
@@ -29,9 +30,10 @@ func main() {
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	journalDir := flag.String("journal-dir", "", "Directory for journal files (empty = disabled)")
 	journalPrefix := flag.String("journal-prefix", "nmea2k", "Journal file name prefix")
-	journalBlockSize := flag.Int("journal-block-size", 65536, "Journal block size (power of 2, min 4096)")
+	journalBlockSize := flag.Int("journal-block-size", 262144, "Journal block size (power of 2, min 4096)")
 	journalRotateDur := flag.String("journal-rotate-duration", "PT1H", "Rotate journal after duration (ISO 8601, e.g. PT1H)")
 	journalRotateSize := flag.Int64("journal-rotate-size", 0, "Rotate journal after bytes (0 = disabled)")
+	journalCompression := flag.String("journal-compression", "zstd", "Journal compression: none, zstd, zstd-dict")
 	flag.Parse()
 
 	if *showVersion {
@@ -75,6 +77,19 @@ func main() {
 			}
 		}
 
+		var compression journal.CompressionType
+		switch *journalCompression {
+		case "none":
+			compression = journal.CompressionNone
+		case "zstd":
+			compression = journal.CompressionZstd
+		case "zstd-dict":
+			compression = journal.CompressionZstdDict
+		default:
+			logger.Error("invalid journal-compression", "value", *journalCompression)
+			os.Exit(1)
+		}
+
 		journalCh = make(chan server.RxFrame, 16384)
 		broker.SetJournal(journalCh)
 
@@ -82,6 +97,7 @@ func main() {
 			Dir:            *journalDir,
 			Prefix:         *journalPrefix,
 			BlockSize:      *journalBlockSize,
+			Compression:    compression,
 			RotateDuration: rotateDur,
 			RotateSize:     *journalRotateSize,
 			Logger:         logger,
@@ -100,7 +116,7 @@ func main() {
 				}
 			}
 		}()
-		logger.Info("journal enabled", "dir", *journalDir, "block_size", *journalBlockSize)
+		logger.Info("journal enabled", "dir", *journalDir, "block_size", *journalBlockSize, "compression", *journalCompression)
 	}
 
 	go broker.Run()

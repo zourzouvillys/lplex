@@ -47,10 +47,9 @@ func makeAddressClaim(t time.Time, src uint8, name uint64) RxFrame {
 	}
 }
 
-// writeAndRead is a helper that writes frames to a journal and reads them back.
-func writeAndRead(t *testing.T, blockSize int, frames []RxFrame) []journal.Entry {
+// writeAndReadWith is the core helper that writes frames with a given config and reads them back.
+func writeAndReadWith(t *testing.T, cfg JournalConfig, frames []RxFrame) []journal.Entry {
 	t.Helper()
-	dir := t.TempDir()
 	devices := NewDeviceRegistry()
 
 	ch := make(chan RxFrame, len(frames))
@@ -59,7 +58,6 @@ func writeAndRead(t *testing.T, blockSize int, frames []RxFrame) []journal.Entry
 	}
 	close(ch)
 
-	cfg := JournalConfig{Dir: dir, BlockSize: blockSize}
 	w, err := NewJournalWriter(cfg, devices, ch)
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +67,7 @@ func writeAndRead(t *testing.T, blockSize int, frames []RxFrame) []journal.Entry
 		t.Fatal(err)
 	}
 
-	entries, err := os.ReadDir(dir)
+	entries, err := os.ReadDir(cfg.Dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +75,7 @@ func writeAndRead(t *testing.T, blockSize int, frames []RxFrame) []journal.Entry
 		t.Fatal("no journal files written")
 	}
 
-	path := filepath.Join(dir, entries[0].Name())
+	path := filepath.Join(cfg.Dir, entries[0].Name())
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -101,6 +99,12 @@ func writeAndRead(t *testing.T, blockSize int, frames []RxFrame) []journal.Entry
 		t.Fatal(err)
 	}
 	return result
+}
+
+// writeAndRead is a helper that writes frames to a journal and reads them back (uncompressed).
+func writeAndRead(t *testing.T, blockSize int, frames []RxFrame) []journal.Entry {
+	t.Helper()
+	return writeAndReadWith(t, JournalConfig{Dir: t.TempDir(), BlockSize: blockSize}, frames)
 }
 
 func TestJournalRoundTrip(t *testing.T) {
@@ -861,5 +865,741 @@ func TestJournalProductInfoInBlockChange(t *testing.T) {
 	}
 	if !found {
 		t.Error("device at source 5 not found in device table")
+	}
+}
+
+// --- Compression tests ---
+
+func TestJournalCompressedRoundTrip(t *testing.T) {
+	base := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	frames := []RxFrame{
+		makeFrame(base, 129025, 10, []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}),
+		makeFrame(base.Add(100*time.Microsecond), 129026, 11, []byte{0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8}),
+		makeFrame(base.Add(200*time.Microsecond), 129029, 12, []byte{0x10, 0x20, 0x30, 0x40, 0x50}),
+		makeFrame(base.Add(5*time.Second), 60928, 13, []byte{0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE}),
+	}
+
+	cfg := JournalConfig{Dir: t.TempDir(), BlockSize: 4096, Compression: journal.CompressionZstd}
+	result := writeAndReadWith(t, cfg, frames)
+
+	if len(result) != len(frames) {
+		t.Fatalf("got %d frames, want %d", len(result), len(frames))
+	}
+
+	for i, got := range result {
+		want := frames[i]
+		if got.Header.PGN != want.Header.PGN {
+			t.Errorf("frame %d: PGN %d, want %d", i, got.Header.PGN, want.Header.PGN)
+		}
+		if got.Header.Source != want.Header.Source {
+			t.Errorf("frame %d: Source %d, want %d", i, got.Header.Source, want.Header.Source)
+		}
+		if !bytes.Equal(got.Data, want.Data) {
+			t.Errorf("frame %d: data mismatch: got %x, want %x", i, got.Data, want.Data)
+		}
+		if got.Timestamp.UnixMicro() != want.Timestamp.UnixMicro() {
+			t.Errorf("frame %d: timestamp %v, want %v", i, got.Timestamp, want.Timestamp)
+		}
+	}
+}
+
+func TestJournalCompressedBlockBoundary(t *testing.T) {
+	base := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	var frames []RxFrame
+	for i := range 700 {
+		frames = append(frames, makeFrame(
+			base.Add(time.Duration(i)*time.Millisecond),
+			129025, 10,
+			[]byte{byte(i), byte(i >> 8), 3, 4, 5, 6, 7, 8},
+		))
+	}
+
+	cfg := JournalConfig{Dir: t.TempDir(), BlockSize: 4096, Compression: journal.CompressionZstd}
+	result := writeAndReadWith(t, cfg, frames)
+
+	if len(result) != len(frames) {
+		t.Fatalf("got %d frames, want %d", len(result), len(frames))
+	}
+
+	for i, got := range result {
+		want := frames[i]
+		if !bytes.Equal(got.Data, want.Data) {
+			t.Errorf("frame %d: data mismatch across block boundary", i)
+		}
+	}
+}
+
+func TestJournalCompressedTimeSeeking(t *testing.T) {
+	base := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	var frames []RxFrame
+	for i := range 700 {
+		frames = append(frames, makeFrame(
+			base.Add(time.Duration(i)*100*time.Millisecond),
+			129025, 10,
+			[]byte{byte(i), byte(i >> 8), 3, 4, 5, 6, 7, 8},
+		))
+	}
+
+	dir := t.TempDir()
+	devices := NewDeviceRegistry()
+	ch := make(chan RxFrame, len(frames))
+	for _, f := range frames {
+		ch <- f
+	}
+	close(ch)
+
+	cfg := JournalConfig{Dir: dir, BlockSize: 4096, Compression: journal.CompressionZstd}
+	w, err := NewJournalWriter(cfg, devices, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, _ := os.ReadDir(dir)
+	f, err := os.Open(filepath.Join(dir, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	reader, err := journal.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if reader.BlockCount() < 2 {
+		t.Fatalf("expected at least 2 blocks, got %d", reader.BlockCount())
+	}
+
+	midTime := base.Add(35 * time.Second)
+	if err := reader.SeekToTime(midTime); err != nil {
+		t.Fatal(err)
+	}
+
+	if !reader.Next() {
+		t.Fatal("expected to read a frame after seeking")
+	}
+	first := reader.Frame()
+	if first.Timestamp.After(midTime) {
+		t.Errorf("first frame after seek is %v, which is after target %v", first.Timestamp, midTime)
+	}
+}
+
+func TestJournalCompressedCrashResilience(t *testing.T) {
+	base := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	var frames []RxFrame
+	for i := range 700 {
+		frames = append(frames, makeFrame(
+			base.Add(time.Duration(i)*time.Millisecond),
+			129025, 10,
+			[]byte{byte(i), byte(i >> 8), 3, 4, 5, 6, 7, 8},
+		))
+	}
+
+	dir := t.TempDir()
+	devices := NewDeviceRegistry()
+	ch := make(chan RxFrame, len(frames))
+	for _, f := range frames {
+		ch <- f
+	}
+	close(ch)
+
+	cfg := JournalConfig{Dir: dir, BlockSize: 4096, Compression: journal.CompressionZstd}
+	w, err := NewJournalWriter(cfg, devices, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, _ := os.ReadDir(dir)
+	path := filepath.Join(dir, entries[0].Name())
+
+	// Read to get original block count
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origReader, err := journal.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origBlocks := origReader.BlockCount()
+	_ = f.Close()
+
+	if origBlocks < 2 {
+		t.Fatalf("need at least 2 blocks, got %d", origBlocks)
+	}
+
+	// Truncate the file: destroy the block index and part of the last block.
+	// The forward-scan should recover what it can.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep only ~60% of the file to kill the index and at least one block.
+	truncLen := len(data) * 6 / 10
+	if err := os.WriteFile(path, data[:truncLen], 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err = os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	reader, err := journal.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if reader.BlockCount() == 0 {
+		t.Fatal("expected at least one surviving block")
+	}
+	if reader.BlockCount() >= origBlocks {
+		t.Errorf("truncated file should have fewer blocks: got %d, orig %d", reader.BlockCount(), origBlocks)
+	}
+
+	// Read all surviving frames
+	count := 0
+	for reader.Next() {
+		count++
+	}
+	if reader.Err() != nil {
+		t.Errorf("unexpected error reading surviving blocks: %v", reader.Err())
+	}
+	if count == 0 {
+		t.Error("expected frames from surviving blocks")
+	}
+}
+
+func TestJournalBlockIndex(t *testing.T) {
+	base := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	var frames []RxFrame
+	for i := range 700 {
+		frames = append(frames, makeFrame(
+			base.Add(time.Duration(i)*time.Millisecond),
+			129025, 10,
+			[]byte{byte(i), byte(i >> 8), 3, 4, 5, 6, 7, 8},
+		))
+	}
+
+	dir := t.TempDir()
+	devices := NewDeviceRegistry()
+	ch := make(chan RxFrame, len(frames))
+	for _, f := range frames {
+		ch <- f
+	}
+	close(ch)
+
+	cfg := JournalConfig{Dir: dir, BlockSize: 4096, Compression: journal.CompressionZstd}
+	w, err := NewJournalWriter(cfg, devices, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, _ := os.ReadDir(dir)
+	path := filepath.Join(dir, entries[0].Name())
+
+	// Verify the block index magic exists at the end of the file.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) < 8 {
+		t.Fatal("file too small")
+	}
+	tail := data[len(data)-8:]
+	count := binary.LittleEndian.Uint32(tail[0:4])
+	magic := tail[4:8]
+	if !bytes.Equal(magic, journal.BlockIndexMagic[:]) {
+		t.Errorf("block index magic: got %x, want %x", magic, journal.BlockIndexMagic)
+	}
+
+	// Open and verify the reader can read using the index.
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	reader, err := journal.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if reader.BlockCount() != int(count) {
+		t.Errorf("reader block count %d != index count %d", reader.BlockCount(), count)
+	}
+
+	// Read all frames to confirm integrity.
+	total := 0
+	for reader.Next() {
+		total++
+	}
+	if reader.Err() != nil {
+		t.Fatal(reader.Err())
+	}
+	if total != len(frames) {
+		t.Errorf("got %d frames, want %d", total, len(frames))
+	}
+}
+
+func TestJournalBlockIndexMissing(t *testing.T) {
+	base := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	var frames []RxFrame
+	for i := range 700 {
+		frames = append(frames, makeFrame(
+			base.Add(time.Duration(i)*time.Millisecond),
+			129025, 10,
+			[]byte{byte(i), byte(i >> 8), 3, 4, 5, 6, 7, 8},
+		))
+	}
+
+	dir := t.TempDir()
+	devices := NewDeviceRegistry()
+	ch := make(chan RxFrame, len(frames))
+	for _, f := range frames {
+		ch <- f
+	}
+	close(ch)
+
+	cfg := JournalConfig{Dir: dir, BlockSize: 4096, Compression: journal.CompressionZstd}
+	w, err := NewJournalWriter(cfg, devices, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, _ := os.ReadDir(dir)
+	path := filepath.Join(dir, entries[0].Name())
+
+	// Strip the block index from the end of the file.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Find and remove the index: last 8 bytes are count+magic, then count*8 bytes of offsets.
+	tail := data[len(data)-8:]
+	indexCount := binary.LittleEndian.Uint32(tail[0:4])
+	indexSize := int(indexCount)*8 + 8
+	strippedData := data[:len(data)-indexSize]
+	if err := os.WriteFile(path, strippedData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The reader should fall back to forward scanning.
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	reader, err := journal.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if reader.BlockCount() != int(indexCount) {
+		t.Errorf("forward-scan block count %d != original %d", reader.BlockCount(), indexCount)
+	}
+
+	total := 0
+	for reader.Next() {
+		total++
+	}
+	if reader.Err() != nil {
+		t.Fatal(reader.Err())
+	}
+	if total != len(frames) {
+		t.Errorf("got %d frames, want %d", total, len(frames))
+	}
+}
+
+func TestJournalUncompressedStillWorks(t *testing.T) {
+	base := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	frames := []RxFrame{
+		makeFrame(base, 129025, 10, []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}),
+		makeFrame(base.Add(100*time.Microsecond), 129026, 11, []byte{0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8}),
+	}
+
+	// Explicitly CompressionNone (zero value, same as before)
+	cfg := JournalConfig{Dir: t.TempDir(), BlockSize: 4096, Compression: journal.CompressionNone}
+	result := writeAndReadWith(t, cfg, frames)
+
+	if len(result) != len(frames) {
+		t.Fatalf("got %d frames, want %d", len(result), len(frames))
+	}
+	for i, got := range result {
+		want := frames[i]
+		if !bytes.Equal(got.Data, want.Data) {
+			t.Errorf("frame %d: data mismatch", i)
+		}
+	}
+}
+
+func TestJournalCompressedSmallerThanUncompressed(t *testing.T) {
+	base := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	var frames []RxFrame
+	for i := range 700 {
+		frames = append(frames, makeFrame(
+			base.Add(time.Duration(i)*time.Millisecond),
+			129025, 10,
+			[]byte{byte(i), byte(i >> 8), 3, 4, 5, 6, 7, 8},
+		))
+	}
+
+	dirUncompressed := t.TempDir()
+	dirCompressed := t.TempDir()
+
+	// Write uncompressed
+	writeAndReadWith(t, JournalConfig{Dir: dirUncompressed, BlockSize: 4096}, frames)
+	// Write compressed
+	writeAndReadWith(t, JournalConfig{Dir: dirCompressed, BlockSize: 4096, Compression: journal.CompressionZstd}, frames)
+
+	ucEntries, _ := os.ReadDir(dirUncompressed)
+	cEntries, _ := os.ReadDir(dirCompressed)
+
+	ucInfo, _ := ucEntries[0].Info()
+	cInfo, _ := cEntries[0].Info()
+
+	t.Logf("uncompressed: %d bytes, compressed: %d bytes, ratio: %.1fx",
+		ucInfo.Size(), cInfo.Size(), float64(ucInfo.Size())/float64(cInfo.Size()))
+
+	if cInfo.Size() >= ucInfo.Size() {
+		t.Errorf("compressed file (%d) should be smaller than uncompressed (%d)", cInfo.Size(), ucInfo.Size())
+	}
+}
+
+// --- Dictionary compression tests ---
+
+func TestJournalZstdDictRoundTrip(t *testing.T) {
+	base := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+	frames := []RxFrame{
+		makeFrame(base, 129025, 10, []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}),
+		makeFrame(base.Add(100*time.Microsecond), 129026, 11, []byte{0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8}),
+		makeFrame(base.Add(200*time.Microsecond), 129029, 12, []byte{0x10, 0x20, 0x30, 0x40, 0x50}),
+		makeFrame(base.Add(5*time.Second), 60928, 13, []byte{0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE}),
+	}
+
+	cfg := JournalConfig{Dir: t.TempDir(), BlockSize: 4096, Compression: journal.CompressionZstdDict}
+	result := writeAndReadWith(t, cfg, frames)
+
+	if len(result) != len(frames) {
+		t.Fatalf("got %d frames, want %d", len(result), len(frames))
+	}
+
+	for i, got := range result {
+		want := frames[i]
+		if got.Header.PGN != want.Header.PGN {
+			t.Errorf("frame %d: PGN %d, want %d", i, got.Header.PGN, want.Header.PGN)
+		}
+		if got.Header.Source != want.Header.Source {
+			t.Errorf("frame %d: Source %d, want %d", i, got.Header.Source, want.Header.Source)
+		}
+		if !bytes.Equal(got.Data, want.Data) {
+			t.Errorf("frame %d: data mismatch: got %x, want %x", i, got.Data, want.Data)
+		}
+		if got.Timestamp.UnixMicro() != want.Timestamp.UnixMicro() {
+			t.Errorf("frame %d: timestamp %v, want %v", i, got.Timestamp, want.Timestamp)
+		}
+	}
+}
+
+func TestJournalZstdDictBlockBoundary(t *testing.T) {
+	base := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	var frames []RxFrame
+	for i := range 700 {
+		frames = append(frames, makeFrame(
+			base.Add(time.Duration(i)*time.Millisecond),
+			129025, 10,
+			[]byte{byte(i), byte(i >> 8), 3, 4, 5, 6, 7, 8},
+		))
+	}
+
+	cfg := JournalConfig{Dir: t.TempDir(), BlockSize: 4096, Compression: journal.CompressionZstdDict}
+	result := writeAndReadWith(t, cfg, frames)
+
+	if len(result) != len(frames) {
+		t.Fatalf("got %d frames, want %d", len(result), len(frames))
+	}
+
+	for i, got := range result {
+		want := frames[i]
+		if !bytes.Equal(got.Data, want.Data) {
+			t.Errorf("frame %d: data mismatch across block boundary", i)
+		}
+	}
+}
+
+func TestJournalZstdDictTimeSeeking(t *testing.T) {
+	base := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	var frames []RxFrame
+	for i := range 700 {
+		frames = append(frames, makeFrame(
+			base.Add(time.Duration(i)*100*time.Millisecond),
+			129025, 10,
+			[]byte{byte(i), byte(i >> 8), 3, 4, 5, 6, 7, 8},
+		))
+	}
+
+	dir := t.TempDir()
+	devices := NewDeviceRegistry()
+	ch := make(chan RxFrame, len(frames))
+	for _, f := range frames {
+		ch <- f
+	}
+	close(ch)
+
+	cfg := JournalConfig{Dir: dir, BlockSize: 4096, Compression: journal.CompressionZstdDict}
+	w, err := NewJournalWriter(cfg, devices, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, _ := os.ReadDir(dir)
+	f, err := os.Open(filepath.Join(dir, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	reader, err := journal.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if reader.BlockCount() < 2 {
+		t.Fatalf("expected at least 2 blocks, got %d", reader.BlockCount())
+	}
+
+	midTime := base.Add(35 * time.Second)
+	if err := reader.SeekToTime(midTime); err != nil {
+		t.Fatal(err)
+	}
+
+	if !reader.Next() {
+		t.Fatal("expected to read a frame after seeking")
+	}
+	first := reader.Frame()
+	if first.Timestamp.After(midTime) {
+		t.Errorf("first frame after seek is %v, which is after target %v", first.Timestamp, midTime)
+	}
+}
+
+func TestJournalZstdDictCrashResilience(t *testing.T) {
+	base := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	var frames []RxFrame
+	for i := range 700 {
+		frames = append(frames, makeFrame(
+			base.Add(time.Duration(i)*time.Millisecond),
+			129025, 10,
+			[]byte{byte(i), byte(i >> 8), 3, 4, 5, 6, 7, 8},
+		))
+	}
+
+	dir := t.TempDir()
+	devices := NewDeviceRegistry()
+	ch := make(chan RxFrame, len(frames))
+	for _, f := range frames {
+		ch <- f
+	}
+	close(ch)
+
+	cfg := JournalConfig{Dir: dir, BlockSize: 4096, Compression: journal.CompressionZstdDict}
+	w, err := NewJournalWriter(cfg, devices, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, _ := os.ReadDir(dir)
+	path := filepath.Join(dir, entries[0].Name())
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origReader, err := journal.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origBlocks := origReader.BlockCount()
+	_ = f.Close()
+
+	if origBlocks < 2 {
+		t.Fatalf("need at least 2 blocks, got %d", origBlocks)
+	}
+
+	// Truncate: kill the block index and part of the last block.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	truncLen := len(data) * 6 / 10
+	if err := os.WriteFile(path, data[:truncLen], 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err = os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	reader, err := journal.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if reader.BlockCount() == 0 {
+		t.Fatal("expected at least one surviving block")
+	}
+	if reader.BlockCount() >= origBlocks {
+		t.Errorf("truncated file should have fewer blocks: got %d, orig %d", reader.BlockCount(), origBlocks)
+	}
+
+	count := 0
+	for reader.Next() {
+		count++
+	}
+	if reader.Err() != nil {
+		t.Errorf("unexpected error reading surviving blocks: %v", reader.Err())
+	}
+	if count == 0 {
+		t.Error("expected frames from surviving blocks")
+	}
+}
+
+func TestJournalZstdDictSmallerThanUncompressed(t *testing.T) {
+	base := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	var frames []RxFrame
+	for i := range 20000 {
+		pgn := []uint32{129025, 129026, 127250, 130306, 128267}[i%5]
+		src := []uint8{10, 11, 12, 13, 14}[i%5]
+		frames = append(frames, makeFrame(
+			base.Add(time.Duration(i)*5*time.Millisecond),
+			pgn, src,
+			[]byte{byte(i), byte(i >> 8), 0x03, 0x04, 0x05, 0x06, 0x07, 0x08},
+		))
+	}
+
+	dirUncompressed := t.TempDir()
+	dirZstd := t.TempDir()
+	dirDict := t.TempDir()
+
+	writeAndReadWith(t, JournalConfig{Dir: dirUncompressed, BlockSize: 65536}, frames)
+	writeAndReadWith(t, JournalConfig{Dir: dirZstd, BlockSize: 65536, Compression: journal.CompressionZstd}, frames)
+	writeAndReadWith(t, JournalConfig{Dir: dirDict, BlockSize: 65536, Compression: journal.CompressionZstdDict}, frames)
+
+	sizeOf := func(dir string) int64 {
+		entries, _ := os.ReadDir(dir)
+		var total int64
+		for _, e := range entries {
+			info, _ := e.Info()
+			total += info.Size()
+		}
+		return total
+	}
+
+	ucTotal := sizeOf(dirUncompressed)
+	zstdTotal := sizeOf(dirZstd)
+	dictTotal := sizeOf(dirDict)
+
+	t.Logf("uncompressed: %d, plain zstd: %d (%.1fx), zstd+dict: %d (%.1fx)",
+		ucTotal, zstdTotal, float64(ucTotal)/float64(zstdTotal),
+		dictTotal, float64(ucTotal)/float64(dictTotal))
+
+	// Dict compression must be smaller than uncompressed (the dictionary
+	// overhead is significant on synthetic data, but still beats raw).
+	if dictTotal >= ucTotal {
+		t.Errorf("zstd+dict (%d) should be smaller than uncompressed (%d)", dictTotal, ucTotal)
+	}
+}
+
+func TestJournalZstdDictInspect(t *testing.T) {
+	base := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+
+	var frames []RxFrame
+	for i := range 700 {
+		frames = append(frames, makeFrame(
+			base.Add(time.Duration(i)*time.Millisecond),
+			129025, 10,
+			[]byte{byte(i), byte(i >> 8), 3, 4, 5, 6, 7, 8},
+		))
+	}
+
+	dir := t.TempDir()
+	devices := NewDeviceRegistry()
+	ch := make(chan RxFrame, len(frames))
+	for _, f := range frames {
+		ch <- f
+	}
+	close(ch)
+
+	cfg := JournalConfig{Dir: dir, BlockSize: 4096, Compression: journal.CompressionZstdDict}
+	w, err := NewJournalWriter(cfg, devices, ch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, _ := os.ReadDir(dir)
+	f, err := os.Open(filepath.Join(dir, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	reader, err := journal.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if reader.Compression() != journal.CompressionZstdDict {
+		t.Fatalf("compression type: got %d, want %d", reader.Compression(), journal.CompressionZstdDict)
+	}
+
+	for i := range reader.BlockCount() {
+		bi, err := reader.InspectBlock(i)
+		if err != nil {
+			t.Fatalf("block %d: %v", i, err)
+		}
+		if bi.DictLen == 0 {
+			t.Errorf("block %d: DictLen should be > 0", i)
+		}
+		if bi.CompressedLen == 0 {
+			t.Errorf("block %d: CompressedLen should be > 0", i)
+		}
+		if bi.FrameCount == 0 {
+			t.Errorf("block %d: FrameCount should be > 0", i)
+		}
 	}
 }

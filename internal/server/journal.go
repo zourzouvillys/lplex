@@ -10,17 +10,20 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/klauspost/compress/dict"
+	"github.com/klauspost/compress/zstd"
 	"github.com/sixfathoms/lplex/journal"
 )
 
 // JournalConfig configures the journal writer.
 type JournalConfig struct {
 	Dir            string
-	Prefix         string        // default: "nmea2k"
-	BlockSize      int           // default: 65536, power of 2, min 4096
-	RotateDuration time.Duration // 0 = no limit
-	RotateSize     int64         // 0 = no limit
-	RotateCount    int64         // 0 = no limit
+	Prefix         string                  // default: "nmea2k"
+	BlockSize      int                     // default: 262144, power of 2, min 4096
+	Compression    journal.CompressionType // default: CompressionNone
+	RotateDuration time.Duration           // 0 = no limit
+	RotateSize     int64                   // 0 = no limit
+	RotateCount    int64                   // 0 = no limit
 	Logger         *slog.Logger
 }
 
@@ -29,7 +32,7 @@ func (c *JournalConfig) setDefaults() {
 		c.Prefix = "nmea2k"
 	}
 	if c.BlockSize == 0 {
-		c.BlockSize = 65536
+		c.BlockSize = 262144
 	}
 	if c.Logger == nil {
 		c.Logger = slog.Default()
@@ -76,6 +79,11 @@ type JournalWriter struct {
 	blockStartDevices         []journal.Device
 	blockStartDeviceTableSize int // exact serialized size of block-start entries (cached)
 	blockDeviceChanges        []journalDeviceChange
+
+	// compression state
+	zEncoder     *zstd.Encoder
+	compressBuf  []byte
+	blockOffsets []int64 // file offsets of each block (for block index)
 }
 
 // NewJournalWriter creates a writer. Call Run to start.
@@ -84,12 +92,28 @@ func NewJournalWriter(cfg JournalConfig, devices *DeviceRegistry, ch <-chan RxFr
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	return &JournalWriter{
+
+	w := &JournalWriter{
 		cfg:     cfg,
 		devices: devices,
 		ch:      ch,
 		block:   make([]byte, cfg.BlockSize),
-	}, nil
+	}
+
+	switch cfg.Compression {
+	case journal.CompressionZstd:
+		enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+		if err != nil {
+			return nil, fmt.Errorf("init zstd encoder: %w", err)
+		}
+		w.zEncoder = enc
+		w.compressBuf = make([]byte, 0, cfg.BlockSize)
+	case journal.CompressionZstdDict:
+		// No pre-created encoder: we build one per block with the trained dictionary.
+		w.compressBuf = make([]byte, 0, cfg.BlockSize)
+	}
+
+	return w, nil
 }
 
 // Run is the main loop. Blocks until ctx is cancelled or the channel is closed.
@@ -110,7 +134,7 @@ func (w *JournalWriter) Run(ctx context.Context) error {
 	}
 }
 
-// finalize flushes any pending block and closes the file.
+// finalize flushes any pending block, writes the block index, and closes the file.
 func (w *JournalWriter) finalize() error {
 	if w.frameCount > 0 {
 		if err := w.flushBlock(); err != nil {
@@ -118,6 +142,11 @@ func (w *JournalWriter) finalize() error {
 		}
 	}
 	if w.file != nil {
+		if w.cfg.Compression != journal.CompressionNone {
+			if err := w.writeBlockIndex(); err != nil {
+				return err
+			}
+		}
 		if err := w.file.Sync(); err != nil {
 			return err
 		}
@@ -323,6 +352,13 @@ func (w *JournalWriter) flushBlock() error {
 	checksum := crc32.Checksum(w.block[:bs-4], journal.CRC32cTable)
 	binary.LittleEndian.PutUint32(w.block[bs-4:], checksum)
 
+	switch w.cfg.Compression {
+	case journal.CompressionZstd:
+		return w.writeCompressedBlock()
+	case journal.CompressionZstdDict:
+		return w.writeDictCompressedBlock()
+	}
+
 	n, err := w.file.Write(w.block)
 	if err != nil {
 		return fmt.Errorf("journal block write: %w", err)
@@ -331,6 +367,160 @@ func (w *JournalWriter) flushBlock() error {
 
 	w.frameCount = 0
 	w.dataOffset = 8
+
+	return nil
+}
+
+// writeCompressedBlock writes a compressed block with its 12-byte header.
+func (w *JournalWriter) writeCompressedBlock() error {
+	// Record the file offset before writing
+	w.blockOffsets = append(w.blockOffsets, w.fileBytes)
+
+	// Compress the full uncompressed block
+	w.compressBuf = w.zEncoder.EncodeAll(w.block, w.compressBuf[:0])
+
+	// Write 12-byte header: BaseTime(8) + CompressedLen(4)
+	var hdr [12]byte
+	binary.LittleEndian.PutUint64(hdr[0:8], uint64(w.baseTimeUs))
+	binary.LittleEndian.PutUint32(hdr[8:12], uint32(len(w.compressBuf)))
+
+	n, err := w.file.Write(hdr[:])
+	if err != nil {
+		return fmt.Errorf("journal compressed block header write: %w", err)
+	}
+	w.fileBytes += int64(n)
+
+	n, err = w.file.Write(w.compressBuf)
+	if err != nil {
+		return fmt.Errorf("journal compressed block data write: %w", err)
+	}
+	w.fileBytes += int64(n)
+
+	w.frameCount = 0
+	w.dataOffset = 8
+
+	return nil
+}
+
+// writeDictCompressedBlock trains a per-block zstd dictionary and writes
+// the 16-byte header + dictionary + compressed payload. Falls back to
+// DictLen=0 (plain zstd) when dictionary training fails or isn't worthwhile.
+func (w *JournalWriter) writeDictCompressedBlock() error {
+	w.blockOffsets = append(w.blockOffsets, w.fileBytes)
+
+	var dictBytes []byte
+
+	// Only attempt dictionary training when we have enough frame data
+	// to produce meaningful samples (at least 1KB of actual content).
+	if w.dataOffset > 1024 {
+		dictBytes = w.buildBlockDict()
+	}
+
+	if dictBytes != nil {
+		// Compress with the trained dictionary.
+		enc, err := zstd.NewWriter(nil, zstd.WithEncoderDict(dictBytes), zstd.WithEncoderLevel(zstd.SpeedDefault))
+		if err != nil {
+			w.cfg.Logger.Warn("dict encoder init failed, falling back to plain zstd", "error", err, "dict_len", len(dictBytes))
+			dictBytes = nil
+		} else {
+			w.compressBuf = enc.EncodeAll(w.block, w.compressBuf[:0])
+			_ = enc.Close()
+		}
+	}
+
+	if dictBytes == nil {
+		// Fallback: compress without dictionary (DictLen=0 in the header).
+		if w.zEncoder == nil {
+			enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+			if err != nil {
+				return fmt.Errorf("journal zstd encoder init: %w", err)
+			}
+			w.zEncoder = enc
+		}
+		w.compressBuf = w.zEncoder.EncodeAll(w.block, w.compressBuf[:0])
+	}
+
+	// Write 16-byte header: BaseTime(8) + DictLen(4) + CompressedLen(4)
+	var hdr [16]byte
+	binary.LittleEndian.PutUint64(hdr[0:8], uint64(w.baseTimeUs))
+	binary.LittleEndian.PutUint32(hdr[8:12], uint32(len(dictBytes)))
+	binary.LittleEndian.PutUint32(hdr[12:16], uint32(len(w.compressBuf)))
+
+	n, err := w.file.Write(hdr[:])
+	if err != nil {
+		return fmt.Errorf("journal dict block header write: %w", err)
+	}
+	w.fileBytes += int64(n)
+
+	if len(dictBytes) > 0 {
+		n, err = w.file.Write(dictBytes)
+		if err != nil {
+			return fmt.Errorf("journal dict block dict write: %w", err)
+		}
+		w.fileBytes += int64(n)
+	}
+
+	n, err = w.file.Write(w.compressBuf)
+	if err != nil {
+		return fmt.Errorf("journal dict block data write: %w", err)
+	}
+	w.fileBytes += int64(n)
+
+	w.frameCount = 0
+	w.dataOffset = 8
+
+	return nil
+}
+
+// buildBlockDict trains a zstd dictionary from the current block's data.
+// Returns nil if training fails.
+func (w *JournalWriter) buildBlockDict() []byte {
+	// Split the frame data region into ~256-byte samples for dictionary training.
+	const sampleSize = 256
+	frameEnd := w.dataOffset
+	var samples [][]byte
+	for off := 8; off+sampleSize <= frameEnd; off += sampleSize / 2 {
+		s := make([]byte, sampleSize)
+		copy(s, w.block[off:off+sampleSize])
+		samples = append(samples, s)
+	}
+	if len(samples) < 4 {
+		return nil
+	}
+
+	d, err := dict.BuildZstdDict(samples, dict.Options{
+		MaxDictSize: 8192,
+		HashBytes:   6,
+		ZstdDictID:  1,
+		ZstdLevel:   zstd.SpeedDefault,
+	})
+	if err != nil {
+		w.cfg.Logger.Warn("dict build failed", "error", err, "samples", len(samples))
+		return nil
+	}
+	return d
+}
+
+// writeBlockIndex appends the block index to the end of the file.
+func (w *JournalWriter) writeBlockIndex() error {
+	if len(w.blockOffsets) == 0 {
+		return nil
+	}
+
+	// Write offset table
+	buf := make([]byte, len(w.blockOffsets)*8+8)
+	for i, off := range w.blockOffsets {
+		binary.LittleEndian.PutUint64(buf[i*8:], uint64(off))
+	}
+
+	// Write count + magic
+	tail := buf[len(w.blockOffsets)*8:]
+	binary.LittleEndian.PutUint32(tail[0:4], uint32(len(w.blockOffsets)))
+	copy(tail[4:8], journal.BlockIndexMagic[:])
+
+	if _, err := w.file.Write(buf); err != nil {
+		return fmt.Errorf("journal block index write: %w", err)
+	}
 
 	return nil
 }
@@ -344,6 +534,12 @@ func (w *JournalWriter) checkRotation() error {
 		return nil
 	}
 
+	if w.cfg.Compression != journal.CompressionNone {
+		if err := w.writeBlockIndex(); err != nil {
+			return err
+		}
+	}
+
 	if err := w.file.Sync(); err != nil {
 		return err
 	}
@@ -353,6 +549,7 @@ func (w *JournalWriter) checkRotation() error {
 	w.file = nil
 	w.fileBytes = 0
 	w.fileFrames = 0
+	w.blockOffsets = w.blockOffsets[:0]
 	return nil
 }
 
@@ -374,6 +571,7 @@ func (w *JournalWriter) openFile(ts time.Time) error {
 	copy(hdr[0:3], journal.Magic[:])
 	hdr[3] = journal.Version
 	binary.LittleEndian.PutUint32(hdr[4:8], uint32(w.cfg.BlockSize))
+	binary.LittleEndian.PutUint32(hdr[8:12], uint32(w.cfg.Compression))
 
 	if _, err := f.Write(hdr[:]); err != nil {
 		_ = f.Close()
@@ -384,6 +582,7 @@ func (w *JournalWriter) openFile(ts time.Time) error {
 	w.fileStart = ts
 	w.fileBytes = int64(journal.FileHeaderSize)
 	w.fileFrames = 0
+	w.blockOffsets = w.blockOffsets[:0]
 
 	w.cfg.Logger.Info("journal file opened", "path", path)
 	return nil
@@ -394,4 +593,3 @@ func (w *JournalWriter) openFile(ts time.Time) error {
 func (w *JournalWriter) deviceTableSize() int {
 	return 2 + w.blockStartDeviceTableSize + len(w.blockDeviceChanges)*journal.DeviceEntryMaxSize
 }
-

@@ -7,12 +7,24 @@ import (
 	"hash/crc32"
 )
 
+// CompressionType identifies the block compression algorithm.
+type CompressionType uint8
+
+const (
+	CompressionNone    CompressionType = 0
+	CompressionZstd    CompressionType = 1
+	CompressionZstdDict CompressionType = 2
+)
+
 var (
 	Magic           = [3]byte{'L', 'P', 'J'}
 	Version         = byte(0x01)
 	CRC32cTable     = crc32.MakeTable(crc32.Castagnoli)
 	FileHeaderSize  = 16
 	BlockTrailerLen = 10 // DeviceTableOffset(2) + FrameCount(4) + Checksum(4)
+	BlockIndexMagic = [4]byte{'L', 'P', 'J', 'I'}
+	BlockHeaderLen     = 12 // BaseTime(8) + CompressedLen(4), for zstd blocks
+	BlockHeaderLenDict = 16 // BaseTime(8) + DictLen(4) + CompressedLen(4), for zstd+dict blocks
 )
 
 // DeviceEntryMaxSize is the worst-case size of a single device table entry:

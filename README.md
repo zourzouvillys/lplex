@@ -121,12 +121,13 @@ Broker goroutine (single writer, owns all state)
     v
 HTTP Server (:8089)                JournalWriter goroutine
     |                                   |  block-based .lpj files
-    +-- GET  /events                    |  CRC32C checksums
-    +-- PUT  /clients/{id}              |  device table per block
-    +-- GET  /clients/{id}/events       |  O(log N) time seeking
-    +-- PUT  /clients/{id}/ack          |  ~9.5 MB/hour at 200 fps
-    +-- POST /send                      v
-    +-- GET  /devices              .lpj journal files
+    +-- GET  /events                    |  zstd block compression
+    +-- PUT  /clients/{id}              |  CRC32C checksums
+    +-- GET  /clients/{id}/events       |  device table per block
+    +-- PUT  /clients/{id}/ack          |  O(log N) time seeking
+    +-- POST /send                      |  ~2-3 MB/hour at 200 fps
+    +-- GET  /devices                   v
+                                   .lpj journal files
 
 CANWriter goroutine
     |  fragments fast-packets for TX
@@ -162,11 +163,14 @@ Disconnected sessions keep their cursor for the buffer duration.
 lplex can record all CAN frames to disk as block-based binary journal files (`.lpj`) for future replay and analysis.
 
 ```bash
-# Enable recording
+# Enable recording (zstd compression by default)
 lplex -interface can0 -journal-dir /var/log/lplex
 
 # With rotation (new file every hour)
 lplex -interface can0 -journal-dir /var/log/lplex -journal-rotate-duration PT1H
+
+# Disable compression
+lplex -interface can0 -journal-dir /var/log/lplex -journal-compression none
 ```
 
 **Flags:**
@@ -174,18 +178,19 @@ lplex -interface can0 -journal-dir /var/log/lplex -journal-rotate-duration PT1H
 |---|---|---|
 | `-journal-dir` | (disabled) | Directory for journal files |
 | `-journal-prefix` | `nmea2k` | Journal file name prefix |
-| `-journal-block-size` | `65536` | Block size (power of 2, min 4096) |
+| `-journal-block-size` | `262144` | Block size (power of 2, min 4096) |
+| `-journal-compression` | `zstd` | Block compression: `none`, `zstd`, `zstd-dict` |
 | `-journal-rotate-duration` | `PT1H` | Rotate after duration (ISO 8601) |
 | `-journal-rotate-size` | `0` | Rotate after bytes (0 = disabled) |
 
-Files are named `{prefix}-{timestamp}.lpj` and are self-contained: each block includes a device table so consumers can resolve source addresses without external state. See [docs/format.md](docs/format.md) for the binary format specification.
+Blocks are compressed individually with zstd (~4x ratio at 256KB blocks on typical CAN data, ~158 MB/day at 200 fps). Each block carries a device table so consumers can resolve source addresses without external state. A block index at end-of-file enables fast seeking; crash-truncated files are recovered via forward-scan. See [docs/format.md](docs/format.md) for the binary format specification.
 
 ## Deployment
 
 The `.deb` package installs a systemd service that binds to `can0`. Configure via `/etc/default/lplex`:
 
 ```bash
-LPLEX_ARGS="-interface can0 -port 8089 -journal-dir /var/log/lplex"
+LPLEX_ARGS="-interface can0 -port 8089 -journal-dir /var/log/lplex -journal-compression zstd"
 ```
 
 ## License
