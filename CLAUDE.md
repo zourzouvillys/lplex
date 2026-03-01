@@ -9,6 +9,7 @@ go build ./...                  # build all
 go build -o lplex ./cmd/lplex   # build server
 go build -o lplexdump ./cmd/lplexdump
 go test ./... -v -count=1       # run tests
+golangci-lint run               # lint (must pass before pushing)
 ```
 
 ## Release
@@ -88,6 +89,8 @@ CANWriter goroutine
 | `cmd/lplex/` | Server entry point, flag parsing, wires broker + CAN reader/writer + HTTP server |
 | `cmd/lplexdump/` | CLI client: SSE consumer with pretty-print, device table, auto-reconnect |
 | `lplexc/` | Public Go client library: Subscribe, Devices, Send, Session, mDNS discovery |
+| `canbus/` | Public CAN ID parsing (`CANHeader`, `ParseCANID`, `BuildCANID`) and ISO NAME decoding |
+| `journal/` | Public journal format: `Device`, `Reader`, block constants, length-prefixed string helpers |
 | `internal/server/` | Server internals (not importable externally) |
 
 ### internal/server/ File Map
@@ -97,11 +100,10 @@ CANWriter goroutine
 | `broker.go` | `Broker`, `ClientSession`, `subscriber`, `EventFilter`, ring buffer, fan-out, session lifecycle, ephemeral subscriptions, journal feed |
 | `server.go` | HTTP handlers, ephemeral + buffered SSE streaming, filter query param parsing, ISO 8601 duration parser |
 | `can.go` | `CANReader` (SocketCAN rx + fast-packet reassembly), `CANWriter` (SocketCAN tx + fragmentation) |
-| `canid.go` | `CANHeader`, `ParseCANID`, `BuildCANID` (29-bit CAN ID encoding) |
+| `canid.go` | Thin wrappers re-exporting `canbus.ParseCANID`, `canbus.BuildCANID` |
 | `fastpacket.go` | `FastPacketAssembler`, `FragmentFastPacket`, fast-packet PGN registry |
 | `devices.go` | `DeviceRegistry`, PGN 60928/126996 decoding, manufacturer lookup table |
-| `journal.go` | `JournalWriter`, `JournalConfig`, block encoding, file rotation, device table tracking |
-| `journalreader.go` | `JournalReader`, `JournalEntry`, block-aware iteration, binary time seeking, device table resolution |
+| `journal.go` | `JournalWriter`, `JournalConfig`, block encoding, file rotation, device table tracking (with product info) |
 
 ## Client Modes
 
@@ -133,6 +135,7 @@ lplexdump -server http://inuc1.local:8089 -buffer-timeout PT5M
 
 ## Conventions
 
+- Run `golangci-lint run` before pushing (CI enforces it, config in `.golangci.yml`)
 - Go 1.25+, modern patterns (enhanced ServeMux routing, slog, `slices`)
 - No mocks in tests, real instances only
 - CAN ID is 29-bit extended (NMEA 2000 only)
