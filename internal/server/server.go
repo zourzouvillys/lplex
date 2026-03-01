@@ -106,7 +106,9 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		s.logger.Error("failed to encode session response", "error", err)
+	}
 }
 
 // GET /clients/{clientId}/events
@@ -307,7 +309,9 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 // GET /devices
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(s.broker.devices.SnapshotJSON())
+	if _, err := w.Write(s.broker.devices.SnapshotJSON()); err != nil {
+		s.logger.Error("failed to write devices response", "error", err)
+	}
 }
 
 // ParseISO8601Duration parses a subset of ISO 8601 durations (PT format).

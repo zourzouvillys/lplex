@@ -203,7 +203,7 @@ func runEphemeral(ctx context.Context, client *lplexc.Client, jsonMode bool, fil
 	if err != nil {
 		return fmt.Errorf("subscribe: %w", err)
 	}
-	defer sub.Close()
+	defer func() { _ = sub.Close() }()
 
 	log.Printf("streaming (ephemeral)")
 
@@ -234,7 +234,7 @@ func runBuffered(ctx context.Context, client *lplexc.Client, clientID, bufferTim
 	if err != nil {
 		return fmt.Errorf("subscribe: %w", err)
 	}
-	defer sub.Close()
+	defer func() { _ = sub.Close() }()
 
 	log.Printf("streaming (buffered, session=%s)", clientID)
 

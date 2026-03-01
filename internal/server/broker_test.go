@@ -82,7 +82,9 @@ func TestBrokerRingBufferReplay(t *testing.T) {
 	// Verify sequence numbers
 	for i, data := range entries {
 		var msg frameJSON
-		json.Unmarshal(data, &msg)
+		if err := json.Unmarshal(data, &msg); err != nil {
+			t.Fatalf("unmarshal entry %d: %v", i, err)
+		}
 		if msg.Seq != uint64(i+1) {
 			t.Errorf("replay entry %d: seq got %d, want %d", i, msg.Seq, i+1)
 		}
@@ -94,7 +96,9 @@ func TestBrokerRingBufferReplay(t *testing.T) {
 		t.Fatalf("expected 5 replay entries from seq 5, got %d", len(entries))
 	}
 	var firstMsg frameJSON
-	json.Unmarshal(entries[0], &firstMsg)
+	if err := json.Unmarshal(entries[0], &firstMsg); err != nil {
+		t.Fatalf("unmarshal first entry: %v", err)
+	}
 	if firstMsg.Seq != 6 {
 		t.Errorf("first replay entry: seq got %d, want 6", firstMsg.Seq)
 	}
@@ -188,7 +192,9 @@ func TestBrokerAckAndReplay(t *testing.T) {
 	}
 
 	var msg frameJSON
-	json.Unmarshal(entries[0], &msg)
+	if err := json.Unmarshal(entries[0], &msg); err != nil {
+		t.Fatalf("unmarshal entry: %v", err)
+	}
 	if msg.Seq != 4 {
 		t.Errorf("first replay: seq got %d, want 4", msg.Seq)
 	}
@@ -720,7 +726,9 @@ func TestBrokerBufferTimeoutZeroResetsCursor(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	b.AckSession("reset-test", 3)
+	if err := b.AckSession("reset-test", 3); err != nil {
+		t.Fatalf("ack: %v", err)
+	}
 	b.DisconnectSession("reset-test")
 
 	// Recreate with buffer_timeout=0 -> cursor should reset.

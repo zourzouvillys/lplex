@@ -16,7 +16,7 @@ func CANReader(ctx context.Context, iface string, rxFrames chan<- RxFrame, logge
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	receiver := socketcan.NewReceiver(conn)
 	assembler := NewFastPacketAssembler(750 * time.Millisecond)
@@ -83,7 +83,7 @@ func CANWriter(ctx context.Context, iface string, txFrames <-chan TxRequest, log
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	transmitter := socketcan.NewTransmitter(conn)
 	var seqCounter uint8

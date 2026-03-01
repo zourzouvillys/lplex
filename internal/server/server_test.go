@@ -328,7 +328,9 @@ func TestSSEReplay(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// ACK seq 3
-	b.AckSession("replay-test", 3)
+	if err := b.AckSession("replay-test", 3); err != nil {
+		t.Fatalf("ack: %v", err)
+	}
 	b.DisconnectSession("replay-test")
 
 	// Inject more frames while disconnected
@@ -460,7 +462,9 @@ func TestCreateSessionBufferTimeoutZero(t *testing.T) {
 	req := httptest.NewRequest("PUT", "/clients/reset-me", strings.NewReader(`{"buffer_timeout":"PT1M"}`))
 	srv.ServeHTTP(httptest.NewRecorder(), req)
 
-	b.AckSession("reset-me", 42)
+	if err := b.AckSession("reset-me", 42); err != nil {
+		t.Fatalf("ack: %v", err)
+	}
 
 	// Re-create with buffer_timeout=0 -> should reset cursor.
 	req = httptest.NewRequest("PUT", "/clients/reset-me", strings.NewReader(`{"buffer_timeout":"PT0S"}`))
