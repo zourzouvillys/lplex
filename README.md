@@ -7,25 +7,25 @@ CAN bus HTTP bridge for NMEA 2000. Reads raw CAN frames from a SocketCAN interfa
 ### From source
 
 ```bash
-go install github.com/zourzouvillys/lplex/cmd/lplex@latest
-go install github.com/zourzouvillys/lplex/cmd/lplexdump@latest
+go install github.com/sixfathoms/lplex/cmd/lplex@latest
+go install github.com/sixfathoms/lplex/cmd/lplexdump@latest
 ```
 
 ### Homebrew
 
 ```bash
-brew install zourzouvillys/tap/lplex
+brew install sixfathoms/tap/lplex
 ```
 
 ### Docker
 
 ```bash
-docker run --network host --device /dev/can0 ghcr.io/zourzouvillys/lplex:latest
+docker run --network host --device /dev/can0 ghcr.io/sixfathoms/lplex:latest
 ```
 
 ### Debian/Ubuntu
 
-Download the `.deb` from [GitHub Releases](https://github.com/zourzouvillys/lplex/releases) and install:
+Download the `.deb` from [GitHub Releases](https://github.com/sixfathoms/lplex/releases) and install:
 
 ```bash
 sudo dpkg -i lplex_*.deb
@@ -60,7 +60,7 @@ lplexdump -server http://inuc1.local:8089 -buffer-timeout PT5M
 ### Go Client Library
 
 ```go
-import "github.com/zourzouvillys/lplex/lplexc"
+import "github.com/sixfathoms/lplex/lplexc"
 
 // Auto-discover the server
 addr, _ := lplexc.Discover(ctx)

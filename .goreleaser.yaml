@@ -54,7 +54,7 @@ nfpms:
       - lplex
       - lplexdump
     vendor: Theo Zourzouvillys
-    homepage: https://github.com/zourzouvillys/lplex
+    homepage: https://github.com/sixfathoms/lplex
     maintainer: Theo Zourzouvillys
     description: CAN bus HTTP bridge for NMEA 2000
     license: MIT
@@ -75,10 +75,10 @@ brews:
   - ids:
       - default
     repository:
-      owner: zourzouvillys
+      owner: sixfathoms
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    homepage: https://github.com/zourzouvillys/lplex
+    homepage: https://github.com/sixfathoms/lplex
     description: CAN bus HTTP bridge for NMEA 2000
     license: MIT
     install: |
@@ -89,8 +89,8 @@ dockers:
   - ids:
       - lplex
     image_templates:
-      - "ghcr.io/zourzouvillys/lplex:{{ .Version }}-amd64"
-      - "ghcr.io/zourzouvillys/lplex:latest-amd64"
+      - "ghcr.io/sixfathoms/lplex:{{ .Version }}-amd64"
+      - "ghcr.io/sixfathoms/lplex:latest-amd64"
     use: buildx
     build_flag_templates:
       - "--platform=linux/amd64"
@@ -105,8 +105,8 @@ dockers:
   - ids:
       - lplex
     image_templates:
-      - "ghcr.io/zourzouvillys/lplex:{{ .Version }}-arm64"
-      - "ghcr.io/zourzouvillys/lplex:latest-arm64"
+      - "ghcr.io/sixfathoms/lplex:{{ .Version }}-arm64"
+      - "ghcr.io/sixfathoms/lplex:latest-arm64"
     use: buildx
     build_flag_templates:
       - "--platform=linux/arm64"
@@ -120,15 +120,15 @@ dockers:
       - lplexc/
 
 docker_manifests:
-  - name_template: "ghcr.io/zourzouvillys/lplex:{{ .Version }}"
+  - name_template: "ghcr.io/sixfathoms/lplex:{{ .Version }}"
     image_templates:
-      - "ghcr.io/zourzouvillys/lplex:{{ .Version }}-amd64"
-      - "ghcr.io/zourzouvillys/lplex:{{ .Version }}-arm64"
+      - "ghcr.io/sixfathoms/lplex:{{ .Version }}-amd64"
+      - "ghcr.io/sixfathoms/lplex:{{ .Version }}-arm64"
 
-  - name_template: "ghcr.io/zourzouvillys/lplex:latest"
+  - name_template: "ghcr.io/sixfathoms/lplex:latest"
     image_templates:
-      - "ghcr.io/zourzouvillys/lplex:latest-amd64"
-      - "ghcr.io/zourzouvillys/lplex:latest-arm64"
+      - "ghcr.io/sixfathoms/lplex:latest-amd64"
+      - "ghcr.io/sixfathoms/lplex:latest-arm64"
 
 changelog:
   sort: asc

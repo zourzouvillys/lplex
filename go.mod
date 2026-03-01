@@ -1,4 +1,4 @@
-module github.com/zourzouvillys/lplex
+module github.com/sixfathoms/lplex
 
 go 1.25.7
 

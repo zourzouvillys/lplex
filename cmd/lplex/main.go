@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/grandcat/zeroconf"
-	"github.com/zourzouvillys/lplex/internal/server"
+	"github.com/sixfathoms/lplex/internal/server"
 )
 
 var (

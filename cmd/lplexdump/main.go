@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/zourzouvillys/lplex/lplexc"
+	"github.com/sixfathoms/lplex/lplexc"
 )
 
 var (
