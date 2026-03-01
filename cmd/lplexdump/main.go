@@ -50,7 +50,7 @@ func (s *uintSlice) String() string {
 	return strings.Join(parts, ",")
 }
 func (s *uintSlice) Set(v string) error {
-	n, err := strconv.ParseUint(v, 10, 64)
+	n, err := strconv.ParseUint(v, 10, strconv.IntSize)
 	if err != nil {
 		return err
 	}
