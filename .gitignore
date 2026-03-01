@@ -22,9 +22,3 @@ bin/
 *.db
 *.db-shm
 *.db-wal
-
-# TypeScript packages
-ts/node_modules/
-ts/dist/
-ts/cli/node_modules/
-ts/cli/dist/
