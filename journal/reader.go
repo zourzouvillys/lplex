@@ -12,6 +12,8 @@ import (
 	"github.com/sixfathoms/lplex/canbus"
 )
 
+const maxBlockIndexEntries = 1 << 18 // 262,144 blocks (~2 MiB index table)
+
 // Entry is a single decoded frame from the journal.
 type Entry struct {
 	Timestamp time.Time
@@ -140,6 +142,9 @@ func readBlockIndex(r io.ReadSeeker, fileSize int64) ([]blockInfo, error) {
 	if count == 0 {
 		return nil, nil
 	}
+	if count > maxBlockIndexEntries {
+		return nil, fmt.Errorf("block index has %d entries, exceeds limit %d", count, maxBlockIndexEntries)
+	}
 
 	// Read the offset table: Count * 8 bytes before the tail
 	tableSize := int64(count) * 8
@@ -159,6 +164,15 @@ func readBlockIndex(r io.ReadSeeker, fileSize int64) ([]blockInfo, error) {
 	blocks := make([]blockInfo, count)
 	for i := range count {
 		off := int64(binary.LittleEndian.Uint64(buf[i*8:]))
+		if off < int64(FileHeaderSize) {
+			return nil, fmt.Errorf("block %d offset %d before file header", i, off)
+		}
+		if off >= tableStart {
+			return nil, fmt.Errorf("block %d offset %d overlaps index footer", i, off)
+		}
+		if i > 0 && off <= blocks[i-1].Offset {
+			return nil, fmt.Errorf("block offsets not strictly increasing at %d", i)
+		}
 		blocks[i].Offset = off
 	}
 
@@ -205,9 +219,15 @@ func scanBlocks(r io.ReadSeeker, fileSize int64, compression CompressionType) ([
 		if compression == CompressionZstdDict {
 			dictLen := binary.LittleEndian.Uint32(hdr[8:12])
 			compressedLen := binary.LittleEndian.Uint32(hdr[12:16])
+			if dictLen == 0 && compressedLen == 0 {
+				break
+			}
 			blockEnd = pos + int64(hdrLen) + int64(dictLen) + int64(compressedLen)
 		} else {
 			compressedLen := binary.LittleEndian.Uint32(hdr[8:12])
+			if compressedLen == 0 {
+				break
+			}
 			blockEnd = pos + int64(hdrLen) + int64(compressedLen)
 		}
 
@@ -512,6 +532,13 @@ func (jr *Reader) loadCompressedBlock(n int) error {
 		return fmt.Errorf("read block %d header: %w", n, err)
 	}
 	compressedLen := binary.LittleEndian.Uint32(hdr[8:12])
+	maxPayload, err := jr.blockPayloadLimit(n, BlockHeaderLen)
+	if err != nil {
+		return err
+	}
+	if compressedLen == 0 || int64(compressedLen) > maxPayload {
+		return fmt.Errorf("block %d invalid compressed length %d (max %d)", n, compressedLen, maxPayload)
+	}
 
 	// Read compressed payload
 	compressed := make([]byte, compressedLen)
@@ -551,6 +578,16 @@ func (jr *Reader) loadDictCompressedBlock(n int) error {
 	}
 	dictLen := binary.LittleEndian.Uint32(hdr[8:12])
 	compressedLen := binary.LittleEndian.Uint32(hdr[12:16])
+	maxPayload, err := jr.blockPayloadLimit(n, BlockHeaderLenDict)
+	if err != nil {
+		return err
+	}
+	if dictLen > uint32(maxPayload) {
+		return fmt.Errorf("block %d invalid dictionary length %d (max %d)", n, dictLen, maxPayload)
+	}
+	if compressedLen == 0 || int64(compressedLen) > maxPayload-int64(dictLen) {
+		return fmt.Errorf("block %d invalid compressed length %d with dict %d (max %d)", n, compressedLen, dictLen, maxPayload-int64(dictLen))
+	}
 
 	// Read dictionary (may be empty if training failed for this block)
 	var dictData []byte
@@ -601,6 +638,33 @@ func (jr *Reader) loadDictCompressedBlock(n int) error {
 	jr.blockBuf = decompressed[:jr.blockSize]
 
 	return jr.parseLoadedBlock(n)
+}
+
+// blockPayloadLimit returns the maximum payload bytes available after headerLen
+// for block n, bounded by the next block offset or file end.
+func (jr *Reader) blockPayloadLimit(n int, headerLen int) (int64, error) {
+	start := jr.blocks[n].Offset
+	var end int64
+	if n+1 < len(jr.blocks) {
+		end = jr.blocks[n+1].Offset
+	} else {
+		cur, err := jr.r.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return 0, fmt.Errorf("seek current: %w", err)
+		}
+		end, err = jr.r.Seek(0, io.SeekEnd)
+		if err != nil {
+			return 0, fmt.Errorf("seek to end: %w", err)
+		}
+		if _, err := jr.r.Seek(cur, io.SeekStart); err != nil {
+			return 0, fmt.Errorf("restore seek: %w", err)
+		}
+	}
+	available := end - start - int64(headerLen)
+	if available < 0 {
+		return 0, fmt.Errorf("block %d has invalid boundaries", n)
+	}
+	return available, nil
 }
 
 // parseLoadedBlock validates the CRC and sets up the frame cursor from blockBuf.
