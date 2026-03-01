@@ -8,8 +8,6 @@ builds:
       - CGO_ENABLED=0
     goos:
       - linux
-      - darwin
-      - windows
     goarch:
       - amd64
       - arm64
@@ -27,7 +25,6 @@ builds:
     goos:
       - linux
       - darwin
-      - windows
     goarch:
       - amd64
       - arm64
@@ -38,14 +35,15 @@ builds:
       - -X main.date={{.Date}}
 
 archives:
-  - id: default
+  - id: lplex-server
     ids:
       - lplex
+    name_template: "lplex_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+  - id: lplexdump-client
+    ids:
       - lplexdump
-    format_overrides:
-      - goos: windows
-        formats: [zip]
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "lplexdump_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 nfpms:
   - id: lplex-deb
@@ -71,17 +69,17 @@ nfpms:
 
 brews:
   - ids:
-      - default
+      - lplexdump-client
+    name: lplexdump
     repository:
       owner: sixfathoms
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Formula
     homepage: https://github.com/sixfathoms/lplex
-    description: CAN bus HTTP bridge for NMEA 2000
+    description: NMEA 2000 CAN bus streaming client
     license: MIT
     install: |
-      bin.install "lplex"
       bin.install "lplexdump"
 
 dockers_v2:
