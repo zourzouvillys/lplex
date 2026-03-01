@@ -1,0 +1,25 @@
+{
+  "name": "@sixfathoms/lplex-cli",
+  "version": "0.1.0",
+  "description": "CLI client for lplex CAN bus HTTP bridge (like lplexdump, but in TypeScript)",
+  "type": "module",
+  "bin": {
+    "lplex-cli": "./dist/main.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@sixfathoms/lplex": "file:..",
+    "bonjour-service": "^1.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.5.0"
+  },
+  "license": "MIT"
+}

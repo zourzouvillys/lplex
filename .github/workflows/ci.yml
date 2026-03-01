@@ -34,3 +34,32 @@ jobs:
       - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.10
+
+  ts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install & build library
+        working-directory: ts
+        run: npm ci && npm run build
+
+      - name: Typecheck library
+        working-directory: ts
+        run: npx tsc --noEmit
+
+      - name: Test library
+        working-directory: ts
+        run: npm test
+
+      - name: Install & build CLI
+        working-directory: ts/cli
+        run: npm ci && npm run build
+
+      - name: Typecheck CLI
+        working-directory: ts/cli
+        run: npx tsc --noEmit
