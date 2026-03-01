@@ -76,6 +76,7 @@ brews:
       owner: sixfathoms
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
     homepage: https://github.com/sixfathoms/lplex
     description: CAN bus HTTP bridge for NMEA 2000
     license: MIT
