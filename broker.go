@@ -172,6 +172,7 @@ type Broker struct {
 	txFrames   chan TxRequest
 	devices    *DeviceRegistry
 	logger     *slog.Logger
+	done       chan struct{} // closed when Run() returns
 
 	// ring buffer (protected by mu for replay reads)
 	mu       sync.RWMutex
@@ -198,7 +199,8 @@ type Broker struct {
 	consumerMu sync.RWMutex
 	consumers  map[*Consumer]struct{}
 
-	journalDir string
+	journalDir  string
+	replicaMode bool // when true, honor frame.Seq instead of auto-incrementing
 }
 
 // TxRequest is a frame to write to the CAN bus.
@@ -213,6 +215,16 @@ type BrokerConfig struct {
 	MaxBufferDuration time.Duration // cap on client buffer_timeout
 	JournalDir        string        // directory containing .lpj files (for consumer journal fallback)
 	Logger            *slog.Logger
+
+	// ReplicaMode makes the broker honor frame.Seq instead of auto-incrementing.
+	// Used by the cloud replication server where sequence numbers originate
+	// from the boat's broker.
+	ReplicaMode bool
+
+	// InitialHead sets the starting head value. Use this when resuming a
+	// replica broker from persisted state so the ring starts at the right
+	// position. Zero means start at 1 (the default).
+	InitialHead uint64
 }
 
 // NewBroker creates a new broker with the given config.
@@ -231,28 +243,39 @@ func NewBroker(cfg BrokerConfig) *Broker {
 		cfg.MaxBufferDuration = 5 * time.Minute
 	}
 
+	head := uint64(1)
+	if cfg.InitialHead > 0 {
+		head = cfg.InitialHead
+	}
+
 	return &Broker{
 		rxFrames:          make(chan RxFrame, 256),
 		txFrames:          make(chan TxRequest, 64),
 		devices:           NewDeviceRegistry(),
 		logger:            cfg.Logger,
+		done:              make(chan struct{}),
 		ring:              make([]ringEntry, cfg.RingSize),
 		ringMask:          cfg.RingSize - 1,
-		head:              1, // seq starts at 1 (0 means "never ACK'd")
-		tail:              1,
+		head:              head,
+		tail:              head, // empty ring at the right position
 		sessions:          make(map[string]*ClientSession),
 		subscribers:       make(map[*subscriber]struct{}),
 		consumers:         make(map[*Consumer]struct{}),
 		maxBufferDuration: cfg.MaxBufferDuration,
 		journalDir:        cfg.JournalDir,
+		replicaMode:       cfg.ReplicaMode,
 	}
 }
 
 // Run is the broker's main loop. Call in its own goroutine.
 // Exits when rxFrames is closed.
 func (b *Broker) Run() {
-	// Broadcast ISO Request for Address Claim so devices already on the bus identify themselves.
-	b.sendISORequest(0xFF, 60928)
+	defer close(b.done)
+
+	if !b.replicaMode {
+		// Broadcast ISO Request for Address Claim so devices already on the bus identify themselves.
+		b.sendISORequest(0xFF, 60928)
+	}
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -294,6 +317,9 @@ func (b *Broker) handleFrame(frame RxFrame) {
 	// Track per-source packet stats for every frame.
 	newSource := b.devices.RecordPacket(src, frame.Timestamp, len(frame.Data))
 
+	// Device discovery: always decode address claims and product info for
+	// the device registry, but only send ISO requests when we have a real
+	// CAN bus (not in replica mode).
 	switch frame.Header.PGN {
 	case 60928:
 		if dev := b.devices.HandleAddressClaim(src, frame.Data); dev != nil {
@@ -304,7 +330,9 @@ func (b *Broker) handleFrame(frame RxFrame) {
 				"class", dev.DeviceClass,
 			)
 			b.fanOutDevice(dev)
-			b.sendISORequest(src, 126996)
+			if !b.replicaMode {
+				b.sendISORequest(src, 126996)
+			}
 		}
 	case 126996:
 		if dev := b.devices.HandleProductInfo(src, frame.Data); dev != nil {
@@ -317,13 +345,19 @@ func (b *Broker) handleFrame(frame RxFrame) {
 			b.fanOutDevice(dev)
 		}
 	default:
-		if newSource {
+		if newSource && !b.replicaMode {
 			b.sendISORequest(src, 60928)
 		}
 	}
 
-	// Capture seq before ring buffer write (head gets incremented inside the lock)
-	seq := b.head
+	// Determine sequence number: in replica mode, use the frame's seq
+	// from the source broker. Otherwise, auto-increment.
+	var seq uint64
+	if b.replicaMode {
+		seq = frame.Seq
+	} else {
+		seq = b.head
+	}
 
 	// Serialize frame to JSON
 	msg := frameJSON{
@@ -344,15 +378,31 @@ func (b *Broker) handleFrame(frame RxFrame) {
 
 	// Append to ring buffer
 	b.mu.Lock()
-	idx := b.head & uint64(b.ringMask)
-	b.ring[idx] = ringEntry{
-		Seq:       b.head,
-		Timestamp: frame.Timestamp,
-		Header:    frame.Header,
-		RawData:   frame.Data,
-		JSON:      jsonBytes,
+	if b.replicaMode {
+		// In replica mode, write at the sequence position provided by the
+		// source broker and advance head to track the next expected seq.
+		idx := seq & uint64(b.ringMask)
+		b.ring[idx] = ringEntry{
+			Seq:       seq,
+			Timestamp: frame.Timestamp,
+			Header:    frame.Header,
+			RawData:   frame.Data,
+			JSON:      jsonBytes,
+		}
+		if seq+1 > b.head {
+			b.head = seq + 1
+		}
+	} else {
+		idx := b.head & uint64(b.ringMask)
+		b.ring[idx] = ringEntry{
+			Seq:       b.head,
+			Timestamp: frame.Timestamp,
+			Header:    frame.Header,
+			RawData:   frame.Data,
+			JSON:      jsonBytes,
+		}
+		b.head++
 	}
-	b.head++
 	// Advance tail if ring is full
 	if b.head-b.tail > uint64(b.ringMask+1) {
 		b.tail = b.head - uint64(b.ringMask+1)
@@ -556,8 +606,14 @@ func (b *Broker) TxFrames() <-chan TxRequest {
 }
 
 // CloseRx closes the rxFrames channel, signaling the broker to stop processing.
+// Wait on Done() to know when the broker goroutine has actually exited.
 func (b *Broker) CloseRx() {
 	close(b.rxFrames)
+}
+
+// Done returns a channel that is closed when the broker's Run() method returns.
+func (b *Broker) Done() <-chan struct{} {
+	return b.done
 }
 
 // SetJournal sets the journal channel. Must be called before Run.

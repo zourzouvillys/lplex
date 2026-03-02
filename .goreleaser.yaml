@@ -34,6 +34,22 @@ builds:
       - -X main.commit={{.Commit}}
       - -X main.date={{.Date}}
 
+  - id: lplex-cloud
+    main: ./cmd/lplex-cloud
+    binary: lplex-cloud
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
 archives:
   - id: lplex-server
     ids:
@@ -44,6 +60,11 @@ archives:
     ids:
       - lplexdump
     name_template: "lplexdump_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+  - id: lplex-cloud-archive
+    ids:
+      - lplex-cloud
+    name_template: "lplex-cloud_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 nfpms:
   - id: lplex-deb

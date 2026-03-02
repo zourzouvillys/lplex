@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -34,6 +35,11 @@ func main() {
 	journalRotateDur := flag.String("journal-rotate-duration", "PT1H", "Rotate journal after duration (ISO 8601, e.g. PT1H)")
 	journalRotateSize := flag.Int64("journal-rotate-size", 0, "Rotate journal after bytes (0 = disabled)")
 	journalCompression := flag.String("journal-compression", "zstd", "Journal compression: none, zstd, zstd-dict")
+	replTarget := flag.String("replication-target", "", "Cloud replication gRPC address (host:port)")
+	replInstanceID := flag.String("replication-instance-id", "", "Instance ID for cloud replication")
+	replTLSCert := flag.String("replication-tls-cert", "", "Client certificate for replication mTLS")
+	replTLSKey := flag.String("replication-tls-key", "", "Client private key for replication mTLS")
+	replTLSCA := flag.String("replication-tls-ca", "", "CA certificate for replication server verification")
 	configFile := flag.String("config", "", "Path to HOCON config file (default: ./lplex.conf, /etc/lplex/lplex.conf)")
 	flag.Parse()
 
@@ -69,6 +75,7 @@ func main() {
 	broker := lplex.NewBroker(lplex.BrokerConfig{
 		RingSize:          65536,
 		MaxBufferDuration: bufDuration,
+		JournalDir:        *journalDir,
 		Logger:            logger,
 	})
 
@@ -155,6 +162,39 @@ func main() {
 			}
 		}
 	}()
+
+	// Start replication client if configured
+	var replClient *lplex.ReplicationClient
+	if *replTarget != "" && *replInstanceID != "" {
+		replClient = lplex.NewReplicationClient(lplex.ReplicationClientConfig{
+			Target:     *replTarget,
+			InstanceID: *replInstanceID,
+			CertFile:   *replTLSCert,
+			KeyFile:    *replTLSKey,
+			CAFile:     *replTLSCA,
+			Logger:     logger,
+		}, broker)
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := replClient.Run(ctx); err != nil {
+				if ctx.Err() == nil {
+					logger.Error("replication client failed", "error", err)
+				}
+			}
+		}()
+		logger.Info("replication enabled", "target", *replTarget, "instance_id", *replInstanceID)
+
+		// Add replication status endpoint
+		srv.HandleFunc("GET /replication/status", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			status := replClient.Status()
+			if err := json.NewEncoder(w).Encode(status); err != nil {
+				logger.Error("failed to encode replication status", "error", err)
+			}
+		})
+	}
 
 	addr := fmt.Sprintf(":%d", *port)
 	httpServer := &http.Server{

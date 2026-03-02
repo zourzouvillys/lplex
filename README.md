@@ -1,6 +1,6 @@
 # lplex
 
-CAN bus HTTP bridge for NMEA 2000. Reads raw CAN frames from a SocketCAN interface, reassembles fast-packets, tracks device discovery, and streams frames to clients over SSE with session management, filtering, and replay.
+CAN bus HTTP bridge for NMEA 2000. Reads raw CAN frames from a SocketCAN interface, reassembles fast-packets, tracks device discovery, and streams frames to clients over SSE with session management, filtering, and replay. Supports cloud replication for remote access to boat data over intermittent connections.
 
 ## Installation
 
@@ -26,6 +26,13 @@ docker run --network host --device /dev/can0 ghcr.io/sixfathoms/lplex:latest
 
 # From source
 go install github.com/sixfathoms/lplex/cmd/lplex@latest
+```
+
+### Cloud Server
+
+```bash
+# From source
+go install github.com/sixfathoms/lplex/cmd/lplex-cloud@latest
 ```
 
 Download `.deb` packages from [GitHub Releases](https://github.com/sixfathoms/lplex/releases).
@@ -105,8 +112,28 @@ lplex -config /etc/lplex/lplex.conf
 # With journal recording enabled
 lplex -interface can0 -port 8089 -journal-dir /var/log/lplex
 
+# With cloud replication
+lplex -interface can0 -replication-target cloud.example.com:9443 \
+  -replication-instance-id boat-001 \
+  -replication-tls-cert /etc/lplex/boat.crt \
+  -replication-tls-key /etc/lplex/boat.key \
+  -replication-tls-ca /etc/lplex/ca.crt
+
 # Or with systemd
 sudo systemctl enable --now lplex
+```
+
+### Cloud Server
+
+```bash
+# Start the cloud server with mTLS
+lplex-cloud -data-dir /data/lplex \
+  -tls-cert /etc/lplex-cloud/server.crt \
+  -tls-key /etc/lplex-cloud/server.key \
+  -tls-client-ca /etc/lplex-cloud/ca.crt
+
+# With a config file
+lplex-cloud -config /etc/lplex-cloud/lplex-cloud.conf
 ```
 
 ### Client (lplexdump)
@@ -163,7 +190,7 @@ Use `-config path/to/lplex.conf` to specify a config file explicitly. If `-confi
 
 If no config file is found, lplex continues with defaults (fully backward compatible).
 
-### Example config
+### Example config (boat)
 
 ```hocon
 interface = can0
@@ -181,6 +208,33 @@ journal {
     size = 0
   }
 }
+
+replication {
+  target = "cloud.example.com:9443"
+  instance-id = "boat-001"
+  tls {
+    cert = "/etc/lplex/boat.crt"
+    key = "/etc/lplex/boat.key"
+    ca = "/etc/lplex/ca.crt"
+  }
+}
+```
+
+### Example config (cloud)
+
+```hocon
+grpc {
+  listen = ":9443"
+  tls {
+    cert = "/etc/lplex-cloud/server.crt"
+    key = "/etc/lplex-cloud/server.key"
+    client-ca = "/etc/lplex-cloud/ca.crt"
+  }
+}
+http {
+  listen = ":8080"
+}
+data-dir = "/data/lplex"
 ```
 
 See [`lplex.conf.example`](lplex.conf.example) for the full annotated version.
@@ -220,11 +274,13 @@ HTTP Server (:8089)                JournalWriter goroutine
     +-- PUT  /clients/{id}/ack          |  O(log N) time seeking
     +-- POST /send                      |  ~2-3 MB/hour at 200 fps
     +-- GET  /devices                   v
-                                   .lpj journal files
+    +-- GET  /replication/status   .lpj journal files
 
-CANWriter goroutine
-    |  fragments fast-packets for TX
-    |  writes to SocketCAN
+CANWriter goroutine            ReplicationClient (optional)
+    |  fragments for TX            |  gRPC to cloud server
+    |  writes to SocketCAN         +-- Live: Consumer -> LiveFrame stream
+                                   +-- Backfill: raw blocks -> Block stream
+                                   +-- Reconnect: exponential backoff
 ```
 
 ## API
@@ -250,6 +306,30 @@ Disconnected sessions keep their cursor for the buffer duration.
 ### Devices
 
 `GET /devices` returns JSON array of all discovered NMEA 2000 devices.
+
+### Replication status (boat)
+
+`GET /replication/status` returns current replication state (available when replication is configured).
+
+## Cloud Replication
+
+lplex can replicate CAN bus data from a boat to a cloud instance over gRPC with mTLS. The boat initiates all connections (no public IP required). Data flows over two independent gRPC streams:
+
+- **Live stream**: realtime frames from the broker's head, delivered to the cloud within seconds
+- **Backfill stream**: raw journal blocks for filling historical gaps, newest-first
+
+On reconnect after a connectivity gap, live data resumes immediately while backfill works through the gap in the background. The cloud runs a replica Broker per instance, so web clients connect to the cloud and get the same SSE API as if they were on the boat.
+
+See [docs/cloud-replication.md](docs/cloud-replication.md) for the full protocol specification.
+
+### Cloud HTTP API
+
+| Endpoint | Description |
+|---|---|
+| `GET /instances` | List all instances |
+| `GET /instances/{id}/status` | Instance status (cursor, holes, lag) |
+| `GET /instances/{id}/events` | SSE stream from instance's broker |
+| `GET /instances/{id}/devices` | Device table |
 
 ## Journal Recording
 

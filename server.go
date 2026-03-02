@@ -34,6 +34,11 @@ func NewServer(broker *Broker, logger *slog.Logger) *Server {
 	return s
 }
 
+// HandleFunc registers an additional HTTP handler on the server's mux.
+func (s *Server) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	s.mux.HandleFunc(pattern, handler)
+}
+
 // ServeHTTP implements http.Handler.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")

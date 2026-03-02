@@ -11,26 +11,15 @@ import (
 
 // configToFlag maps HOCON config paths to CLI flag names.
 var configToFlag = map[string]string{
-	"interface":               "interface",
-	"port":                    "port",
-	"max-buffer-duration":     "max-buffer-duration",
-	"journal.dir":             "journal-dir",
-	"journal.prefix":          "journal-prefix",
-	"journal.block-size":      "journal-block-size",
-	"journal.compression":     "journal-compression",
-	"journal.rotate.duration": "journal-rotate-duration",
-	"journal.rotate.size":     "journal-rotate-size",
-	"replication.target":      "replication-target",
-	"replication.instance-id": "replication-instance-id",
-	"replication.tls.cert":    "replication-tls-cert",
-	"replication.tls.key":     "replication-tls-key",
-	"replication.tls.ca":      "replication-tls-ca",
+	"grpc.listen":       "grpc-listen",
+	"grpc.tls.cert":     "tls-cert",
+	"grpc.tls.key":      "tls-key",
+	"grpc.tls.client-ca": "tls-client-ca",
+	"http.listen":       "http-listen",
+	"data-dir":          "data-dir",
 }
 
 // findConfigFile resolves which config file to use.
-// If configFlag is non-empty, that exact path is required (error if missing).
-// Otherwise, searches ./lplex.conf then /etc/lplex/lplex.conf.
-// Returns "" with no error if no config file is found.
 func findConfigFile(configFlag string) (string, error) {
 	if configFlag != "" {
 		info, err := os.Stat(configFlag)
@@ -38,17 +27,15 @@ func findConfigFile(configFlag string) (string, error) {
 			if errors.Is(err, os.ErrNotExist) {
 				return "", fmt.Errorf("config file not found: %s", configFlag)
 			}
-
 			return "", fmt.Errorf("checking config file %s: %w", configFlag, err)
 		}
 		if info.IsDir() {
 			return "", fmt.Errorf("config path is a directory: %s", configFlag)
 		}
-
 		return configFlag, nil
 	}
 
-	for _, path := range []string{"./lplex.conf", "/etc/lplex/lplex.conf"} {
+	for _, path := range []string{"./lplex-cloud.conf", "/etc/lplex-cloud/lplex-cloud.conf"} {
 		if _, err := os.Stat(path); err == nil {
 			return path, nil
 		}
@@ -58,14 +45,13 @@ func findConfigFile(configFlag string) (string, error) {
 }
 
 // applyConfig parses a HOCON config file and sets any flag values that
-// weren't explicitly provided on the command line. CLI flags always win.
+// weren't explicitly provided on the command line.
 func applyConfig(path string) error {
 	cfg, err := hocon.ParseResource(path)
 	if err != nil {
 		return fmt.Errorf("parsing config %s: %w", path, err)
 	}
 
-	// Collect flags the user explicitly set on the command line.
 	explicit := make(map[string]bool)
 	flag.Visit(func(f *flag.Flag) {
 		explicit[f.Name] = true

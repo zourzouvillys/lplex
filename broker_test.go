@@ -559,3 +559,236 @@ done:
 		t.Error("subscriber should receive device events")
 	}
 }
+
+// --- ReplicaMode tests ---
+
+func newReplicaBroker(initialHead uint64) *Broker {
+	return NewBroker(BrokerConfig{
+		RingSize:    1024,
+		ReplicaMode: true,
+		InitialHead: initialHead,
+		Logger:      slog.Default(),
+	})
+}
+
+func injectReplicaFrame(b *Broker, seq uint64, pgn uint32, src uint8) {
+	b.rxFrames <- RxFrame{
+		Timestamp: time.Now(),
+		Header:    CANHeader{Priority: 2, PGN: pgn, Source: src, Destination: 0xFF},
+		Data:      []byte{byte(seq), 1, 2, 3, 4, 5, 6, 7},
+		Seq:       seq,
+	}
+}
+
+func TestBrokerReplicaModeHonorsFrameSeq(t *testing.T) {
+	b := newReplicaBroker(1)
+	go b.Run()
+	defer b.CloseRx()
+
+	c := b.NewConsumer(ConsumerConfig{Cursor: 1})
+	defer func() { _ = c.Close() }()
+
+	// Send frames with specific sequence numbers
+	for _, seq := range []uint64{1, 2, 3, 4, 5} {
+		injectReplicaFrame(b, seq, 129025, 1)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	for expected := uint64(1); expected <= 5; expected++ {
+		frame, err := c.Next(ctx)
+		if err != nil {
+			t.Fatalf("frame %d: %v", expected, err)
+		}
+		if frame.Seq != expected {
+			t.Fatalf("expected seq %d, got %d", expected, frame.Seq)
+		}
+	}
+}
+
+func TestBrokerReplicaModeHeadAdvancement(t *testing.T) {
+	b := newReplicaBroker(1)
+	go b.Run()
+	defer b.CloseRx()
+
+	// Initially head is 1, so CurrentSeq should be 0 (head-1)
+	if got := b.CurrentSeq(); got != 0 {
+		t.Fatalf("initial CurrentSeq: got %d, want 0", got)
+	}
+
+	injectReplicaFrame(b, 5, 129025, 1)
+	time.Sleep(50 * time.Millisecond)
+
+	// Head should jump to 6 (5+1), so CurrentSeq = 5
+	if got := b.CurrentSeq(); got != 5 {
+		t.Fatalf("after seq 5: CurrentSeq got %d, want 5", got)
+	}
+
+	// Sending a lower seq shouldn't move head backwards
+	injectReplicaFrame(b, 3, 129025, 1)
+	time.Sleep(50 * time.Millisecond)
+
+	if got := b.CurrentSeq(); got != 5 {
+		t.Fatalf("after seq 3: CurrentSeq got %d, want 5 (head shouldn't go backwards)", got)
+	}
+
+	// Sending a higher seq should advance head
+	injectReplicaFrame(b, 10, 129025, 1)
+	time.Sleep(50 * time.Millisecond)
+
+	if got := b.CurrentSeq(); got != 10 {
+		t.Fatalf("after seq 10: CurrentSeq got %d, want 10", got)
+	}
+}
+
+func TestBrokerReplicaModeNoISORequests(t *testing.T) {
+	b := newReplicaBroker(1)
+	go b.Run()
+	defer b.CloseRx()
+
+	// In replica mode, no startup ISO broadcast
+	_, ok := drainTxFrame(b, 200*time.Millisecond)
+	if ok {
+		t.Fatal("replica mode should not send startup ISO Request")
+	}
+
+	// New source should not trigger ISO Request in replica mode
+	injectReplicaFrame(b, 1, 129025, 42)
+	time.Sleep(50 * time.Millisecond)
+
+	_, ok = drainTxFrame(b, 200*time.Millisecond)
+	if ok {
+		t.Fatal("replica mode should not send ISO Request for new source")
+	}
+}
+
+func TestBrokerReplicaModeWithGaps(t *testing.T) {
+	b := newReplicaBroker(1)
+	go b.Run()
+	defer b.CloseRx()
+
+	// Send non-contiguous frames (simulating replication gaps)
+	injectReplicaFrame(b, 1, 129025, 1)
+	injectReplicaFrame(b, 2, 129025, 1)
+	injectReplicaFrame(b, 5, 129025, 1) // skip 3, 4
+	injectReplicaFrame(b, 6, 129025, 1)
+	time.Sleep(50 * time.Millisecond)
+
+	if got := b.CurrentSeq(); got != 6 {
+		t.Fatalf("CurrentSeq: got %d, want 6", got)
+	}
+
+	// Verify we can read the frames that exist
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	c := b.NewConsumer(ConsumerConfig{Cursor: 1})
+	defer func() { _ = c.Close() }()
+
+	frame, err := c.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Seq != 1 {
+		t.Fatalf("first frame: got seq %d, want 1", frame.Seq)
+	}
+
+	frame, err = c.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Seq != 2 {
+		t.Fatalf("second frame: got seq %d, want 2", frame.Seq)
+	}
+}
+
+func TestBrokerInitialHead(t *testing.T) {
+	b := newReplicaBroker(5000)
+	go b.Run()
+	defer b.CloseRx()
+
+	// CurrentSeq should reflect the initial head minus 1
+	if got := b.CurrentSeq(); got != 4999 {
+		t.Fatalf("initial CurrentSeq: got %d, want 4999", got)
+	}
+
+	// New frames should continue from the initial head
+	injectReplicaFrame(b, 5000, 129025, 1)
+	injectReplicaFrame(b, 5001, 129025, 1)
+	time.Sleep(50 * time.Millisecond)
+
+	if got := b.CurrentSeq(); got != 5001 {
+		t.Fatalf("after frames: CurrentSeq got %d, want 5001", got)
+	}
+
+	// Consumer starting from 5000 should read the new frames
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	c := b.NewConsumer(ConsumerConfig{Cursor: 5000})
+	defer func() { _ = c.Close() }()
+
+	frame, err := c.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Seq != 5000 {
+		t.Fatalf("expected seq 5000, got %d", frame.Seq)
+	}
+}
+
+func TestBrokerInitialHeadZeroDefaultsToOne(t *testing.T) {
+	b := NewBroker(BrokerConfig{
+		RingSize:    1024,
+		ReplicaMode: true,
+		InitialHead: 0, // zero means start at 1
+		Logger:      slog.Default(),
+	})
+	go b.Run()
+	defer b.CloseRx()
+
+	if got := b.CurrentSeq(); got != 0 {
+		t.Fatalf("zero InitialHead should start at head=1 (CurrentSeq=0), got %d", got)
+	}
+}
+
+func TestBrokerReplicaModeRingWrap(t *testing.T) {
+	// Small ring to test wraparound
+	b := NewBroker(BrokerConfig{
+		RingSize:    16,
+		ReplicaMode: true,
+		InitialHead: 1,
+		Logger:      slog.Default(),
+	})
+	go b.Run()
+	defer b.CloseRx()
+
+	// Fill more than the ring size
+	for seq := uint64(1); seq <= 32; seq++ {
+		injectReplicaFrame(b, seq, 129025, 1)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	if got := b.CurrentSeq(); got != 32 {
+		t.Fatalf("CurrentSeq: got %d, want 32", got)
+	}
+
+	// Recent frames should still be readable
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	c := b.NewConsumer(ConsumerConfig{Cursor: 25})
+	defer func() { _ = c.Close() }()
+
+	for expected := uint64(25); expected <= 32; expected++ {
+		frame, err := c.Next(ctx)
+		if err != nil {
+			t.Fatalf("frame %d: %v", expected, err)
+		}
+		if frame.Seq != expected {
+			t.Fatalf("expected seq %d, got %d", expected, frame.Seq)
+		}
+	}
+}

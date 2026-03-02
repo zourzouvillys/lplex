@@ -1,0 +1,78 @@
+syntax = "proto3";
+package lplex.replication.v1;
+option go_package = "github.com/sixfathoms/lplex/proto/replication/v1;replicationv1";
+
+service Replication {
+  // Unary handshake: authenticate, exchange sync state.
+  rpc Handshake(HandshakeRequest) returns (HandshakeResponse);
+
+  // Stream 1: realtime frames from boat head forward.
+  rpc Live(stream LiveUpstream) returns (stream LiveDownstream);
+
+  // Stream 2: bulk block transfer for backfilling holes.
+  rpc Backfill(stream BackfillUpstream) returns (stream BackfillDownstream);
+}
+
+// --- Handshake ---
+
+message HandshakeRequest {
+  string instance_id = 1;
+  uint64 head_seq = 2;        // boat's current head sequence
+  uint64 journal_bytes = 3;   // total journal bytes on boat disk
+}
+
+message HandshakeResponse {
+  uint64 cursor = 1;                // cloud has continuous data through this seq
+  repeated SeqRange holes = 2;      // gaps the cloud is missing
+  uint64 live_start_from = 3;       // seq to start live stream from
+}
+
+message SeqRange {
+  uint64 start = 1;  // inclusive
+  uint64 end = 2;    // exclusive
+}
+
+// --- Live Stream ---
+
+message LiveUpstream {
+  oneof msg {
+    LiveFrame frame = 1;
+    LiveStatus status = 2;
+  }
+}
+
+message LiveFrame {
+  uint64 seq = 1;
+  int64 timestamp_us = 2;
+  uint32 can_id = 3;       // 29-bit extended CAN ID
+  bytes data = 4;
+}
+
+message LiveStatus {
+  uint64 head_seq = 1;        // boat's latest sequence
+  uint64 journal_bytes = 2;   // total journal bytes
+}
+
+message LiveDownstream {
+  uint64 acked_through = 1;   // cloud has received live frames through this seq
+}
+
+// --- Backfill Stream ---
+
+message BackfillUpstream {
+  Block block = 1;
+}
+
+message Block {
+  uint64 base_seq = 1;
+  int64 base_time_us = 2;
+  uint32 frame_count = 3;
+  bytes data = 4;           // raw block bytes (compressed per journal format, passthrough)
+  bool compressed = 5;
+  uint32 block_size = 6;    // uncompressed block size (needed to write valid journal files)
+}
+
+message BackfillDownstream {
+  uint64 continuous_through = 1;    // contiguous data now extends through this seq
+  repeated SeqRange remaining = 2;  // holes still unfilled
+}
