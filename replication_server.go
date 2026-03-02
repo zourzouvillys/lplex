@@ -154,14 +154,20 @@ func (s *InstanceState) stopBroker() {
 	if s.broker == nil {
 		return
 	}
-	s.broker.CloseRx()
-	if s.cancelFunc != nil {
-		s.cancelFunc()
-	}
+	b := s.broker
+	s.broker = nil
+
+	// Signal the broker to stop, then wait for Run() to exit so it's no
+	// longer sending on the journal channel before we close it.
+	b.CloseRx()
+	<-b.Done()
+
 	if s.journalCh != nil {
 		close(s.journalCh)
 	}
-	s.broker = nil
+	if s.cancelFunc != nil {
+		s.cancelFunc()
+	}
 	s.journalCh = nil
 	s.cancelFunc = nil
 	s.logger.Info("broker stopped", "instance", s.ID)

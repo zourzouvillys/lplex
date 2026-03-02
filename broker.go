@@ -172,6 +172,7 @@ type Broker struct {
 	txFrames   chan TxRequest
 	devices    *DeviceRegistry
 	logger     *slog.Logger
+	done       chan struct{} // closed when Run() returns
 
 	// ring buffer (protected by mu for replay reads)
 	mu       sync.RWMutex
@@ -252,6 +253,7 @@ func NewBroker(cfg BrokerConfig) *Broker {
 		txFrames:          make(chan TxRequest, 64),
 		devices:           NewDeviceRegistry(),
 		logger:            cfg.Logger,
+		done:              make(chan struct{}),
 		ring:              make([]ringEntry, cfg.RingSize),
 		ringMask:          cfg.RingSize - 1,
 		head:              head,
@@ -268,6 +270,8 @@ func NewBroker(cfg BrokerConfig) *Broker {
 // Run is the broker's main loop. Call in its own goroutine.
 // Exits when rxFrames is closed.
 func (b *Broker) Run() {
+	defer close(b.done)
+
 	if !b.replicaMode {
 		// Broadcast ISO Request for Address Claim so devices already on the bus identify themselves.
 		b.sendISORequest(0xFF, 60928)
@@ -602,8 +606,14 @@ func (b *Broker) TxFrames() <-chan TxRequest {
 }
 
 // CloseRx closes the rxFrames channel, signaling the broker to stop processing.
+// Wait on Done() to know when the broker goroutine has actually exited.
 func (b *Broker) CloseRx() {
 	close(b.rxFrames)
+}
+
+// Done returns a channel that is closed when the broker's Run() method returns.
+func (b *Broker) Done() <-chan struct{} {
+	return b.done
 }
 
 // SetJournal sets the journal channel. Must be called before Run.
