@@ -2,6 +2,16 @@
 
 CAN bus HTTP bridge for NMEA 2000. Reads raw CAN frames from a SocketCAN interface, reassembles fast-packets, tracks device discovery, and streams frames to clients over SSE with session management, filtering, and replay. Supports cloud replication for remote access to boat data over intermittent connections.
 
+- **Real-time SSE streaming** with [ephemeral and buffered session modes](#api), per-client filtering by PGN, manufacturer, instance, or device name
+- **Fast-packet reassembly** for multi-frame NMEA 2000 PGNs, with automatic device discovery via ISO requests
+- **[Journal recording](#journal-recording)** to block-based `.lpj` files with zstd compression, CRC32C checksums, and O(log N) time seeking
+- **[Retention and archival](#retention-and-archival)** with max-age/min-keep/max-size knobs, soft/hard thresholds, configurable overflow policy, and pluggable archive scripts
+- **[Cloud replication](#cloud-replication)** over gRPC with mTLS, live + backfill streams, hole tracking, and lazy per-instance Broker on the cloud side
+- **Pull-based Consumer** with tiered replay (journal files → ring buffer → live), so clients can catch up from any point in history
+- **[Embeddable core](#embedding-lplex)** as a Go package, mount the HTTP handler on any `ServeMux`
+- **[Go client library](#go-client-library-lplexc)** (`lplexc`) with mDNS discovery, subscriptions, device queries, and transmit
+- **CAN transmit** via [POST /send](#transmit) with automatic fast-packet fragmentation
+
 ## Installation
 
 ### Client (lplexdump)
