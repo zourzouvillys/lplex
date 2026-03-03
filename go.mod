@@ -7,6 +7,7 @@ require (
 	github.com/gurkankaymak/hocon v1.2.23
 	github.com/klauspost/compress v1.18.4
 	go.einride.tech/can v0.16.1
+	golang.org/x/crypto v0.46.0
 	google.golang.org/grpc v1.79.1
 	google.golang.org/protobuf v1.36.11
 )
@@ -14,7 +15,6 @@ require (
 require (
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
 	github.com/miekg/dns v1.1.27 // indirect
-	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect

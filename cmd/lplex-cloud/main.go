@@ -13,12 +13,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/sixfathoms/lplex"
 	pb "github.com/sixfathoms/lplex/proto/replication/v1"
+	"golang.org/x/crypto/acme/autocert"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -30,8 +32,15 @@ var (
 )
 
 func main() {
+	// Dual-port mode (backward compat)
 	grpcListen := flag.String("grpc-listen", ":9443", "gRPC listen address")
 	httpListen := flag.String("http-listen", ":8080", "HTTP listen address")
+
+	// ACME mode: single port with Let's Encrypt
+	listen := flag.String("listen", ":443", "Listen address (ACME mode, requires -acme-domain)")
+	acmeDomain := flag.String("acme-domain", "", "Domain for Let's Encrypt (enables single-port ACME mode)")
+	acmeEmail := flag.String("acme-email", "", "Email for Let's Encrypt account")
+
 	dataDir := flag.String("data-dir", "/data/lplex", "Data directory for instance state and journals")
 	tlsCert := flag.String("tls-cert", "", "TLS certificate for gRPC server")
 	tlsKey := flag.String("tls-key", "", "TLS private key for gRPC server")
@@ -103,34 +112,8 @@ func main() {
 
 	replServer := lplex.NewReplicationServer(im, logger)
 
-	// Set up gRPC server
-	var grpcOpts []grpc.ServerOption
-	if *tlsCert != "" && *tlsKey != "" {
-		tlsConfig, err := buildServerTLS(*tlsCert, *tlsKey, *tlsClientCA)
-		if err != nil {
-			logger.Error("TLS setup failed", "error", err)
-			os.Exit(1)
-		}
-		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsConfig)))
-	}
-
-	grpcServer := grpc.NewServer(grpcOpts...)
-	pb.RegisterReplicationServer(grpcServer, replServer)
-
-	grpcLis, err := net.Listen("tcp", *grpcListen)
-	if err != nil {
-		logger.Error("gRPC listen failed", "error", err)
-		os.Exit(1)
-	}
-
-	// Set up HTTP server for cloud API
 	httpMux := http.NewServeMux()
 	registerCloudHTTP(httpMux, im, replServer, logger)
-
-	httpServer := &http.Server{
-		Addr:    *httpListen,
-		Handler: corsMiddleware(httpMux),
-	}
 
 	// Signal handling
 	ctx, cancel := context.WithCancel(context.Background())
@@ -158,22 +141,12 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start servers
-	go func() {
-		logger.Info("gRPC server starting", "addr", *grpcListen, "tls", *tlsCert != "")
-		if err := grpcServer.Serve(grpcLis); err != nil {
-			logger.Error("gRPC server failed", "error", err)
-			cancel()
-		}
-	}()
-
-	go func() {
-		logger.Info("HTTP server starting", "addr", *httpListen, "version", version)
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("HTTP server failed", "error", err)
-			cancel()
-		}
-	}()
+	var shutdown func()
+	if *acmeDomain != "" {
+		shutdown = startACMEServer(ctx, cancel, *listen, *acmeDomain, *acmeEmail, *tlsClientCA, *dataDir, replServer, httpMux, logger)
+	} else {
+		shutdown = startDualPortServer(ctx, cancel, *grpcListen, *httpListen, *tlsCert, *tlsKey, *tlsClientCA, replServer, httpMux, logger)
+	}
 
 	select {
 	case sig := <-sigCh:
@@ -182,18 +155,144 @@ func main() {
 	}
 
 	cancel()
-
-	grpcServer.GracefulStop()
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer shutdownCancel()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		logger.Error("HTTP shutdown error", "error", err)
-	}
-
+	shutdown()
 	im.Shutdown()
 	wg.Wait()
 	logger.Info("lplex-cloud stopped")
+}
+
+// startACMEServer runs a single-port server with Let's Encrypt TLS and optional
+// mTLS for gRPC clients. gRPC and HTTP are multiplexed on the same port by
+// Content-Type header. Returns a shutdown function.
+func startACMEServer(
+	ctx context.Context, cancel context.CancelFunc,
+	listenAddr, domain, email, clientCAFile, dataDir string,
+	replServer *lplex.ReplicationServer, httpMux *http.ServeMux,
+	logger *slog.Logger,
+) func() {
+	m := &autocert.Manager{
+		Cache:      autocert.DirCache(filepath.Join(dataDir, "acme-cache")),
+		Prompt:     autocert.AcceptTOS,
+		HostPolicy: autocert.HostWhitelist(domain),
+		Email:      email,
+	}
+
+	tlsCfg := m.TLSConfig()
+	if clientCAFile != "" {
+		caPool, err := loadCAPool(clientCAFile)
+		if err != nil {
+			logger.Error("mTLS CA setup failed", "error", err)
+			os.Exit(1)
+		}
+		tlsCfg.ClientCAs = caPool
+		tlsCfg.ClientAuth = tls.VerifyClientCertIfGiven
+	}
+
+	// gRPC server without TLS creds: the http.Server handles TLS,
+	// and grpc-go's ServeHTTP propagates TLS state to peer context.
+	grpcServer := grpc.NewServer()
+	pb.RegisterReplicationServer(grpcServer, replServer)
+
+	corsHandler := corsMiddleware(httpMux)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+			grpcServer.ServeHTTP(w, r)
+		} else {
+			corsHandler.ServeHTTP(w, r)
+		}
+	})
+
+	srv := &http.Server{
+		Addr:      listenAddr,
+		Handler:   handler,
+		TLSConfig: tlsCfg,
+	}
+
+	// HTTP-01 challenge + HTTPS redirect on :80
+	challengeSrv := &http.Server{
+		Addr:    ":80",
+		Handler: m.HTTPHandler(nil),
+	}
+	go func() {
+		if err := challengeSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("HTTP-01 challenge server failed", "error", err)
+		}
+	}()
+
+	go func() {
+		logger.Info("ACME server starting", "addr", listenAddr, "domain", domain, "version", version)
+		if err := srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+			logger.Error("ACME server failed", "error", err)
+			cancel()
+		}
+	}()
+
+	return func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			logger.Error("ACME server shutdown error", "error", err)
+		}
+		_ = challengeSrv.Close()
+	}
+}
+
+// startDualPortServer runs gRPC and HTTP on separate ports with self-managed
+// TLS certificates. This is the original mode, preserved for backward compat.
+func startDualPortServer(
+	ctx context.Context, cancel context.CancelFunc,
+	grpcListenAddr, httpListenAddr, certFile, keyFile, clientCAFile string,
+	replServer *lplex.ReplicationServer, httpMux *http.ServeMux,
+	logger *slog.Logger,
+) func() {
+	var grpcOpts []grpc.ServerOption
+	if certFile != "" && keyFile != "" {
+		tlsConfig, err := buildServerTLS(certFile, keyFile, clientCAFile)
+		if err != nil {
+			logger.Error("TLS setup failed", "error", err)
+			os.Exit(1)
+		}
+		grpcOpts = append(grpcOpts, grpc.Creds(credentials.NewTLS(tlsConfig)))
+	}
+
+	grpcServer := grpc.NewServer(grpcOpts...)
+	pb.RegisterReplicationServer(grpcServer, replServer)
+
+	grpcLis, err := net.Listen("tcp", grpcListenAddr)
+	if err != nil {
+		logger.Error("gRPC listen failed", "error", err)
+		os.Exit(1)
+	}
+
+	httpServer := &http.Server{
+		Addr:    httpListenAddr,
+		Handler: corsMiddleware(httpMux),
+	}
+
+	go func() {
+		logger.Info("gRPC server starting", "addr", grpcListenAddr, "tls", certFile != "")
+		if err := grpcServer.Serve(grpcLis); err != nil {
+			logger.Error("gRPC server failed", "error", err)
+			cancel()
+		}
+	}()
+
+	go func() {
+		logger.Info("HTTP server starting", "addr", httpListenAddr, "version", version)
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("HTTP server failed", "error", err)
+			cancel()
+		}
+	}()
+
+	return func() {
+		grpcServer.GracefulStop()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			logger.Error("HTTP shutdown error", "error", err)
+		}
+	}
 }
 
 func buildServerTLS(certFile, keyFile, clientCAFile string) (*tls.Config, error) {
@@ -208,19 +307,27 @@ func buildServerTLS(certFile, keyFile, clientCAFile string) (*tls.Config, error)
 	}
 
 	if clientCAFile != "" {
-		caCert, err := os.ReadFile(clientCAFile)
+		caPool, err := loadCAPool(clientCAFile)
 		if err != nil {
-			return nil, fmt.Errorf("read client CA: %w", err)
-		}
-		caPool := x509.NewCertPool()
-		if !caPool.AppendCertsFromPEM(caCert) {
-			return nil, fmt.Errorf("failed to parse client CA cert")
+			return nil, err
 		}
 		tlsCfg.ClientCAs = caPool
 		tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
 	}
 
 	return tlsCfg, nil
+}
+
+func loadCAPool(caFile string) (*x509.CertPool, error) {
+	caCert, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("read client CA: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caCert) {
+		return nil, fmt.Errorf("failed to parse client CA cert from %s", caFile)
+	}
+	return pool, nil
 }
 
 // registerCloudHTTP sets up the HTTP API routes for the cloud instance.

@@ -11,12 +11,20 @@ import (
 
 // configToFlag maps HOCON config paths to CLI flag names.
 var configToFlag = map[string]string{
-	"grpc.listen":                "grpc-listen",
-	"grpc.tls.cert":              "tls-cert",
-	"grpc.tls.key":               "tls-key",
-	"grpc.tls.client-ca":         "tls-client-ca",
-	"http.listen":                "http-listen",
-	"data-dir":                   "data-dir",
+	// ACME mode (single port)
+	"listen":       "listen",
+	"acme.domain":  "acme-domain",
+	"acme.email":   "acme-email",
+	"tls.client-ca": "tls-client-ca",
+
+	// Dual-port mode (backward compat)
+	"grpc.listen":    "grpc-listen",
+	"grpc.tls.cert":  "tls-cert",
+	"grpc.tls.key":   "tls-key",
+	"grpc.tls.client-ca": "tls-client-ca",
+	"http.listen":    "http-listen",
+
+	"data-dir": "data-dir",
 	"journal.retention.max-age":         "journal-retention-max-age",
 	"journal.retention.min-keep":        "journal-retention-min-keep",
 	"journal.retention.max-size":        "journal-retention-max-size",

@@ -2,8 +2,24 @@
 #
 # Copy to ./lplex-cloud.conf or /etc/lplex-cloud/lplex-cloud.conf
 # CLI flags override values set here.
+#
+# Two modes:
+#   1. ACME mode (recommended): single port with Let's Encrypt TLS.
+#      Set acme.domain to enable. gRPC and HTTP multiplexed on one port.
+#   2. Dual-port mode: separate gRPC and HTTP ports with self-managed certs.
+#      Set grpc.listen + grpc.tls.* to enable.
 
-# gRPC server (replication endpoint)
+# --- ACME mode (single port, Let's Encrypt) ---
+# listen = ":443"
+# acme {
+#   domain = "lplex.dockwise.app"
+#   email = ""
+# }
+# tls {
+#   client-ca = "/etc/lplex-cloud/ca.crt"   # CA for mTLS (optional, gRPC clients)
+# }
+
+# --- Dual-port mode (self-managed certs) ---
 grpc {
   listen = ":9443"
 
@@ -17,7 +33,6 @@ grpc {
   }
 }
 
-# HTTP server (cloud API)
 http {
   listen = ":8080"
 }
