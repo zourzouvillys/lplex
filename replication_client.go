@@ -491,19 +491,23 @@ func (c *ReplicationClient) buildDialOptions() ([]grpc.DialOption, error) {
 		return nil, fmt.Errorf("load client cert: %w", err)
 	}
 
-	caCert, err := os.ReadFile(c.cfg.CAFile)
-	if err != nil {
-		return nil, fmt.Errorf("read CA cert: %w", err)
-	}
-	caPool := x509.NewCertPool()
-	if !caPool.AppendCertsFromPEM(caCert) {
-		return nil, fmt.Errorf("failed to parse CA cert")
-	}
-
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{cert},
-		RootCAs:      caPool,
 	}
+
+	if c.cfg.CAFile != "" {
+		// Custom CA for server verification (self-signed server certs).
+		caCert, err := os.ReadFile(c.cfg.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read CA cert: %w", err)
+		}
+		caPool := x509.NewCertPool()
+		if !caPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("failed to parse CA cert")
+		}
+		tlsCfg.RootCAs = caPool
+	}
+	// When RootCAs is nil, Go uses the system cert pool (trusts Let's Encrypt, etc.)
 
 	return []grpc.DialOption{
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
