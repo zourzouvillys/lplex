@@ -366,10 +366,8 @@ func registerCloudHTTP(mux *http.ServeMux, im *lplex.InstanceManager, replServer
 			return
 		}
 
-		// Create an ephemeral SSE server for this instance's broker
 		srv := lplex.NewServer(broker, logger)
-		// Delegate to the ephemeral SSE handler
-		srv.ServeHTTP(w, r)
+		srv.HandleEphemeralSSE(w, r)
 	})
 
 	mux.HandleFunc("GET /instances/{id}/devices", func(w http.ResponseWriter, r *http.Request) {

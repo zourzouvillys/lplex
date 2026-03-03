@@ -25,7 +25,7 @@ func NewServer(broker *Broker, logger *slog.Logger) *Server {
 		logger: logger,
 		mux:    http.NewServeMux(),
 	}
-	s.mux.HandleFunc("GET /events", s.handleEphemeralSSE)
+	s.mux.HandleFunc("GET /events", s.HandleEphemeralSSE)
 	s.mux.HandleFunc("PUT /clients/{clientId}", s.handleCreateSession)
 	s.mux.HandleFunc("GET /clients/{clientId}/events", s.handleSSE)
 	s.mux.HandleFunc("PUT /clients/{clientId}/ack", s.handleAck)
@@ -177,10 +177,10 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GET /events
+// HandleEphemeralSSE handles GET /events.
 // Ephemeral SSE stream, no session, no ACK, no replay.
 // Optional query params for filtering: pgn, manufacturer, instance, name (hex).
-func (s *Server) handleEphemeralSSE(w http.ResponseWriter, r *http.Request) {
+func (s *Server) HandleEphemeralSSE(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
