@@ -6,7 +6,9 @@ proto:
 		proto/replication/v1/replication.proto
 
 build:
-	go build ./...
+	go build -o lplex ./cmd/lplex
+	go build -o lplex-cloud ./cmd/lplex-cloud
+	go build -o lplexdump ./cmd/lplexdump
 
 test:
 	go test ./... -v -count=1
