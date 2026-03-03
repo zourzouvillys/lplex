@@ -1,4 +1,4 @@
-.PHONY: proto build test lint
+.PHONY: proto build test lint clean
 
 proto:
 	protoc --go_out=. --go_opt=module=github.com/sixfathoms/lplex \
@@ -15,3 +15,6 @@ test:
 
 lint:
 	golangci-lint run
+
+clean:
+	rm -f lplex lplex-cloud lplexdump
