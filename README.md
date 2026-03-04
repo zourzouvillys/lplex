@@ -10,6 +10,7 @@ CAN bus HTTP bridge for NMEA 2000. Reads raw CAN frames from a SocketCAN interfa
 - **Pull-based Consumer** with tiered replay (journal files → ring buffer → live), so clients can catch up from any point in history
 - **[Embeddable core](#embedding-lplex)** as a Go package, mount the HTTP handler on any `ServeMux`
 - **[Go client library](#go-client-library-lplexc)** (`lplexc`) with mDNS discovery, subscriptions, device queries, and transmit
+- **[TypeScript client library](#typescript-client-library-sixfathomslplex)** (`@sixfathoms/lplex`) for browsers and Node.js, with CloudClient for lplex-cloud
 - **CAN transmit** via [POST /send](#transmit) with automatic fast-packet fragmentation
 
 ## Installation
@@ -52,6 +53,14 @@ Download `.deb` packages from [GitHub Releases](https://github.com/sixfathoms/lp
 ```bash
 go get github.com/sixfathoms/lplex/lplexc@latest
 ```
+
+### TypeScript Client Library
+
+```bash
+npm install @sixfathoms/lplex
+```
+
+Zero runtime dependencies. Works in browsers and Node 18+. Ships ESM, CJS, and TypeScript declarations. See [@sixfathoms/lplex on npm](https://www.npmjs.com/package/@sixfathoms/lplex).
 
 ### Embedding lplex
 
@@ -185,6 +194,45 @@ for {
     }
     fmt.Printf("Position: src=%d data=%s\n", ev.Frame.Src, ev.Frame.Data)
 }
+```
+
+### TypeScript Client Library (`@sixfathoms/lplex`)
+
+```typescript
+import { Client } from "@sixfathoms/lplex";
+
+const client = new Client("http://inuc1.local:8089");
+
+// Get devices on the bus
+const devices = await client.devices();
+
+// Get current bus state snapshot
+const snapshot = await client.values();
+
+// Subscribe to position updates from Garmin devices
+const stream = await client.subscribe({
+  pgn: [129025],
+  manufacturer: ["Garmin"],
+});
+
+for await (const event of stream) {
+  if (event.type === "frame") {
+    console.log(`Position: src=${event.frame.src} data=${event.frame.data}`);
+  }
+}
+```
+
+A `CloudClient` is also available for the lplex-cloud management API:
+
+```typescript
+import { CloudClient } from "@sixfathoms/lplex";
+
+const cloud = new CloudClient("https://cloud.example.com");
+const instances = await cloud.instances();
+
+// Get a regular Client scoped to a specific instance
+const client = cloud.client("boat-001");
+const devices = await client.devices();
 ```
 
 ## Configuration
