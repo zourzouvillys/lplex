@@ -31,6 +31,7 @@ func NewServer(broker *Broker, logger *slog.Logger) *Server {
 	s.mux.HandleFunc("PUT /clients/{clientId}/ack", s.handleAck)
 	s.mux.HandleFunc("POST /send", s.handleSend)
 	s.mux.HandleFunc("GET /devices", s.handleDevices)
+	s.mux.HandleFunc("GET /values", s.handleValues)
 	return s
 }
 
@@ -324,6 +325,14 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write(s.broker.devices.SnapshotJSON()); err != nil {
 		s.logger.Error("failed to write devices response", "error", err)
+	}
+}
+
+// GET /values
+func (s *Server) handleValues(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write(s.broker.values.SnapshotJSON(s.broker.devices)); err != nil {
+		s.logger.Error("failed to write values response", "error", err)
 	}
 }
 

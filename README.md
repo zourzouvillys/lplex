@@ -292,6 +292,7 @@ Broker goroutine (single writer, owns all state)
     |
     +---> ring buffer (pre-serialized JSON, power-of-2)
     +---> DeviceRegistry (keyed by source address)
+    +---> ValueStore (last frame per source+PGN)
     +---> sessions map (buffered clients with cursors)
     +---> subscribers map (ephemeral clients, no state)
     +---> journal chan (optional, 16k buffer)
@@ -305,7 +306,8 @@ HTTP Server (:8089)                JournalWriter goroutine
     +-- PUT  /clients/{id}/ack          |  O(log N) time seeking
     +-- POST /send                      |  ~2-3 MB/hour at 200 fps
     +-- GET  /devices                   v
-    +-- GET  /replication/status   .lpj journal files
+    +-- GET  /values                .lpj journal files
+    +-- GET  /replication/status
 
 CANWriter goroutine            ReplicationClient (optional)
     |  fragments for TX            |  gRPC to cloud server
@@ -338,6 +340,10 @@ Disconnected sessions keep their cursor for the buffer duration.
 
 `GET /devices` returns JSON array of all discovered NMEA 2000 devices.
 
+### Last values
+
+`GET /values` returns the most recently received frame for each (device, PGN) pair. Grouped by device, sorted by source address. Useful for getting a snapshot of bus state without subscribing to SSE.
+
 ### Replication status (boat)
 
 `GET /replication/status` returns current replication state (available when replication is configured).
@@ -361,6 +367,7 @@ See [docs/cloud-replication.md](docs/cloud-replication.md) for the full protocol
 | `GET /instances/{id}/status` | Instance status (cursor, holes, lag) |
 | `GET /instances/{id}/events` | SSE stream from instance's broker |
 | `GET /instances/{id}/devices` | Device table |
+| `GET /instances/{id}/values` | Last-seen values per (device, PGN) |
 | `GET /instances/{id}/replication/events?limit=N` | Replication event log (newest first, default 100, max 1024) |
 
 ## Journal Recording

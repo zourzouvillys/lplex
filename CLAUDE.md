@@ -66,6 +66,7 @@ Broker goroutine (single writer, owns all state)
     |
     +---> ring buffer ([]ringEntry, lock-free writes, RLock for consumer reads)
     +---> DeviceRegistry (RWMutex, keyed by source address)
+    +---> ValueStore (RWMutex, last frame per source+PGN)
     +---> consumers map (pull-based: cursor, filter, notify chan)
     +---> sessions map (buffered client metadata: cursor, filter, timeout)
     +---> subscribers map (ephemeral clients: channels, filters, no state)
@@ -80,6 +81,7 @@ HTTP Server (:8089)                    JournalWriter goroutine
     +-- PUT  /clients/{id}/ack              |  tracks device table per block
     +-- POST /send                          v
     +-- GET  /devices                  .lpj journal files (v2, with BaseSeq)
+    +-- GET  /values
     +-- GET  /replication/status
                                        Consumer (pull-based reader)
 CANWriter goroutine                        |  reads from tiered log:
@@ -119,6 +121,7 @@ lplex-cloud process
   |     +-- GET /instances/{id}/status
   |     +-- GET /instances/{id}/events (SSE)
   |     +-- GET /instances/{id}/devices
+  |     +-- GET /instances/{id}/values
   |     +-- GET /instances/{id}/replication/events
   +-- InstanceManager
   |     +-- Per-instance state (InstanceState with HoleTracker + EventLog)
@@ -134,7 +137,7 @@ lplex-cloud process
 
 | Package | Owns |
 |---|---|
-| `lplex` (root) | Public core: `Broker`, `Server`, `Consumer`, `CANReader`, `CANWriter`, `JournalWriter`, `JournalKeeper`, `DeviceRegistry`, `FastPacketAssembler`, `ReplicationClient`, `ReplicationServer`, `InstanceManager`, `HoleTracker`, `BlockWriter`, `EventLog`, filters, ring buffer. Embeddable by external Go services. |
+| `lplex` (root) | Public core: `Broker`, `Server`, `Consumer`, `CANReader`, `CANWriter`, `JournalWriter`, `JournalKeeper`, `DeviceRegistry`, `ValueStore`, `FastPacketAssembler`, `ReplicationClient`, `ReplicationServer`, `InstanceManager`, `HoleTracker`, `BlockWriter`, `EventLog`, filters, ring buffer. Embeddable by external Go services. |
 | `cmd/lplex/` | Boat server: flag parsing, HOCON config, signal handling, mDNS registration, wires broker + CAN I/O + HTTP + optional replication |
 | `cmd/lplex-cloud/` | Cloud server: gRPC + HTTP servers, InstanceManager, mTLS, HOCON config |
 | `cmd/lplexdump/` | CLI client: SSE consumer with pretty-print, device table, auto-reconnect |
@@ -147,9 +150,9 @@ lplex-cloud process
 
 | File | Owns |
 |---|---|
-| `broker.go` | `Broker`, `BrokerConfig` (including `ReplicaMode`, `InitialHead`), `ClientSession`, `subscriber`, `EventFilter`, ring buffer, fan-out, session lifecycle, ephemeral subscriptions, consumer registry, journal feed |
+| `broker.go` | `Broker`, `BrokerConfig` (including `ReplicaMode`, `InitialHead`), `ClientSession`, `subscriber`, `EventFilter`, ring buffer, fan-out, session lifecycle, ephemeral subscriptions, consumer registry, journal feed, value store feed |
 | `consumer.go` | `Consumer`, `Frame`, `ErrFallenBehind`, pull-based tiered reader (journal -> ring -> live), journal fallback with file discovery and seq-based seeking |
-| `server.go` | `Server`, HTTP handlers, ephemeral + buffered SSE streaming, filter query param parsing, ISO 8601 duration parser |
+| `server.go` | `Server`, HTTP handlers, ephemeral + buffered SSE streaming, filter query param parsing, ISO 8601 duration parser, last-values endpoint |
 | `can.go` | `CANReader` (SocketCAN rx + fast-packet reassembly), `CANWriter` (SocketCAN tx + fragmentation) |
 | `canid.go` | Thin wrappers re-exporting `canbus.ParseCANID`, `canbus.BuildCANID` |
 | `fastpacket.go` | `FastPacketAssembler`, `FragmentFastPacket`, fast-packet PGN registry |
@@ -161,6 +164,7 @@ lplex-cloud process
 | `replication_server.go` | `ReplicationServer`, `InstanceManager` (including `SetOnRotate`), `InstanceState`, `InstanceStatus`, `InstanceSummary`, gRPC handlers (Handshake, Live, Backfill), mTLS verification, state persistence, event recording |
 | `block_writer.go` | `BlockWriter`, `BlockWriterConfig` (including `OnRotate` callback), raw block append to journal files with file rotation |
 | `journal_keeper.go` | `JournalKeeper`, `KeeperConfig`, `KeeperDir`, `RotatedFile`, `ArchiveTrigger`, `OverflowPolicy`, retention algorithm (max-age/min-keep/max-size with soft/hard thresholds and overflow policy), archive script execution (JSONL protocol), marker file tracking, retry with exponential backoff, per-directory pause state |
+| `values.go` | `ValueStore`, `DeviceValues`, `PGNValue`, last-seen frame tracking per (source, PGN) pair, snapshot with device resolution |
 | `doc.go` | Package documentation with embedding example |
 
 ## Client Modes

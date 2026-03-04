@@ -199,6 +199,9 @@ type Broker struct {
 	consumerMu sync.RWMutex
 	consumers  map[*Consumer]struct{}
 
+	// last-values store (latest frame per source+PGN)
+	values *ValueStore
+
 	journalDir  string
 	replicaMode bool // when true, honor frame.Seq instead of auto-incrementing
 }
@@ -261,6 +264,7 @@ func NewBroker(cfg BrokerConfig) *Broker {
 		sessions:          make(map[string]*ClientSession),
 		subscribers:       make(map[*subscriber]struct{}),
 		consumers:         make(map[*Consumer]struct{}),
+		values:            NewValueStore(),
 		maxBufferDuration: cfg.MaxBufferDuration,
 		journalDir:        cfg.JournalDir,
 		replicaMode:       cfg.ReplicaMode,
@@ -408,6 +412,9 @@ func (b *Broker) handleFrame(frame RxFrame) {
 		b.tail = b.head - uint64(b.ringMask+1)
 	}
 	b.mu.Unlock()
+
+	// Track last-seen value per (source, PGN).
+	b.values.Record(frame.Header.Source, frame.Header.PGN, frame.Timestamp, frame.Data, seq)
 
 	// Fan out to connected clients (filters checked per-session)
 	b.fanOut(frame.Header, jsonBytes)
@@ -667,4 +674,9 @@ func (b *Broker) removeConsumer(c *Consumer) {
 // Devices returns the broker's device registry.
 func (b *Broker) Devices() *DeviceRegistry {
 	return b.devices
+}
+
+// Values returns the broker's last-values store.
+func (b *Broker) Values() *ValueStore {
+	return b.values
 }
