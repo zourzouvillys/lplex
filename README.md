@@ -361,6 +361,7 @@ See [docs/cloud-replication.md](docs/cloud-replication.md) for the full protocol
 | `GET /instances/{id}/status` | Instance status (cursor, holes, lag) |
 | `GET /instances/{id}/events` | SSE stream from instance's broker |
 | `GET /instances/{id}/devices` | Device table |
+| `GET /instances/{id}/replication/events?limit=N` | Replication event log (newest first, default 100, max 1024) |
 
 ## Journal Recording
 

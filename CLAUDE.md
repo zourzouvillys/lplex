@@ -119,8 +119,9 @@ lplex-cloud process
   |     +-- GET /instances/{id}/status
   |     +-- GET /instances/{id}/events (SSE)
   |     +-- GET /instances/{id}/devices
+  |     +-- GET /instances/{id}/replication/events
   +-- InstanceManager
-  |     +-- Per-instance state (InstanceState with HoleTracker)
+  |     +-- Per-instance state (InstanceState with HoleTracker + EventLog)
   |     +-- Lazy Broker lifecycle (~3MB RAM + 2 goroutines per active instance)
   |     +-- Persistent state (state.json per instance)
   |     +-- SetOnRotate: threads OnRotate callback to JournalWriter/BlockWriter
@@ -133,7 +134,7 @@ lplex-cloud process
 
 | Package | Owns |
 |---|---|
-| `lplex` (root) | Public core: `Broker`, `Server`, `Consumer`, `CANReader`, `CANWriter`, `JournalWriter`, `JournalKeeper`, `DeviceRegistry`, `FastPacketAssembler`, `ReplicationClient`, `ReplicationServer`, `InstanceManager`, `HoleTracker`, `BlockWriter`, filters, ring buffer. Embeddable by external Go services. |
+| `lplex` (root) | Public core: `Broker`, `Server`, `Consumer`, `CANReader`, `CANWriter`, `JournalWriter`, `JournalKeeper`, `DeviceRegistry`, `FastPacketAssembler`, `ReplicationClient`, `ReplicationServer`, `InstanceManager`, `HoleTracker`, `BlockWriter`, `EventLog`, filters, ring buffer. Embeddable by external Go services. |
 | `cmd/lplex/` | Boat server: flag parsing, HOCON config, signal handling, mDNS registration, wires broker + CAN I/O + HTTP + optional replication |
 | `cmd/lplex-cloud/` | Cloud server: gRPC + HTTP servers, InstanceManager, mTLS, HOCON config |
 | `cmd/lplexdump/` | CLI client: SSE consumer with pretty-print, device table, auto-reconnect |
@@ -156,7 +157,8 @@ lplex-cloud process
 | `journal_writer.go` | `JournalWriter`, `JournalConfig` (including `OnRotate` callback), block encoding, zstd compression, block index, file rotation, device table tracking (with product info) |
 | `replication.go` | `SeqRange`, `HoleTracker`, `SyncState`, hole tracking algorithm |
 | `replication_client.go` | `ReplicationClient`, `ReplicationClientConfig`, `ReplicationStatus`, live stream + backfill + reconnect loop |
-| `replication_server.go` | `ReplicationServer`, `InstanceManager` (including `SetOnRotate`), `InstanceState`, `InstanceStatus`, `InstanceSummary`, gRPC handlers (Handshake, Live, Backfill), mTLS verification, state persistence |
+| `replication_events.go` | `EventLog`, `ReplicationEvent`, `ReplicationEventType`, per-instance ring buffer (1024 entries) for diagnostic events (live start/stop, backfill start/stop, block received, checkpoint) |
+| `replication_server.go` | `ReplicationServer`, `InstanceManager` (including `SetOnRotate`), `InstanceState`, `InstanceStatus`, `InstanceSummary`, gRPC handlers (Handshake, Live, Backfill), mTLS verification, state persistence, event recording |
 | `block_writer.go` | `BlockWriter`, `BlockWriterConfig` (including `OnRotate` callback), raw block append to journal files with file rotation |
 | `journal_keeper.go` | `JournalKeeper`, `KeeperConfig`, `KeeperDir`, `RotatedFile`, `ArchiveTrigger`, `OverflowPolicy`, retention algorithm (max-age/min-keep/max-size with soft/hard thresholds and overflow policy), archive script execution (JSONL protocol), marker file tracking, retry with exponential backoff, per-directory pause state |
 | `doc.go` | Package documentation with embedding example |
