@@ -208,10 +208,19 @@ func startACMEServer(
 		TLSConfig: tlsCfg,
 	}
 
-	// HTTP-01 challenge + HTTPS redirect on :80
+	// HTTP-01 challenge + HTTPS redirect on :80.
+	// Health check lives here so ECS can probe over plain HTTP without
+	// tripping the autocert whitelist (localhost != acme domain).
+	challengeHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		m.HTTPHandler(nil).ServeHTTP(w, r)
+	})
 	challengeSrv := &http.Server{
 		Addr:    ":80",
-		Handler: m.HTTPHandler(nil),
+		Handler: challengeHandler,
 	}
 	go func() {
 		if err := challengeSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
