@@ -78,6 +78,11 @@ var fastPacketPGNs = map[uint32]bool{
 	130073: true, // Route and WP Service - WP List - WP Name & Position
 	130074: true, // Route and WP Service - WP List - Database List
 
+	// Engine & Electrical
+	127489: true, // Engine Parameters, Dynamic
+	127506: true, // DC Detailed Status
+	127513: true, // Battery Configuration Status
+
 	// Distance
 	128275: true, // Distance Log
 
