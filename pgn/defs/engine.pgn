@@ -103,6 +103,31 @@ pgn 127506 "DC Detailed Status" {
   capacity_remaining uint16  :16  scale=1      unit="Ah"
 }
 
+# PGN 127509 — Inverter Status
+# Reports operating state of a DC-to-AC inverter. Obsolete per NMEA,
+# superseded by PGN 127511, but still widely transmitted (e.g. Victron).
+pgn 127509 "Inverter Status" {
+  instance          uint8   :8
+  ac_instance       uint8   :8
+  dc_instance       uint8   :8
+  operating_state   uint8   :4
+  inverter_enable   uint8   :2
+  _                          :2
+}
+
+# PGN 127750 — Converter Status
+# Reports the state of a DC/DC or DC/AC converter (charger, inverter, or combo).
+pgn 127750 "Converter Status" {
+  sid                    uint8   :8
+  connection_number      uint8   :8
+  operating_state        uint8   :8
+  temperature_state      uint8   :2
+  overload_state         uint8   :2
+  low_dc_voltage_state   uint8   :2
+  ripple_state           uint8   :2
+  _                               :32
+}
+
 # PGN 127507 — Charger Status
 pgn 127507 "Charger Status" {
   instance             uint8   :8
