@@ -1,0 +1,137 @@
+# Navigation PGNs
+
+enum HeadingReference {
+  0 = "true"
+  1 = "magnetic"
+}
+
+enum SpeedType {
+  0 = "paddle_wheel"
+  1 = "pitot_tube"
+  2 = "doppler"
+  3 = "correlation"
+  4 = "electromagnetic"
+}
+
+enum WindReference {
+  0 = "true_north"
+  1 = "magnetic_north"
+  2 = "apparent"
+  3 = "true_boat"
+  4 = "true_water"
+}
+
+enum DirectionReference {
+  0 = "true"
+  1 = "magnetic"
+  2 = "error"
+  3 = "null"
+}
+
+# PGN 127250 — Vessel Heading
+pgn 127250 "Vessel Heading" {
+  sid                uint8             :8
+  heading            uint16            :16  scale=0.0001 unit="rad"
+  deviation          int16             :16  scale=0.0001 unit="rad"
+  variation          int16             :16  scale=0.0001 unit="rad"
+  heading_reference  HeadingReference  :2
+  _                                    :6
+}
+
+# PGN 127251 — Rate of Turn
+pgn 127251 "Rate of Turn" {
+  sid         uint8   :8
+  rate        int32   :32  scale=3.125e-8  unit="rad/s"
+  _                   :24
+}
+
+# PGN 127257 — Attitude
+pgn 127257 "Attitude" {
+  sid    uint8   :8
+  yaw    int16   :16  scale=0.0001 unit="rad"
+  pitch  int16   :16  scale=0.0001 unit="rad"
+  roll   int16   :16  scale=0.0001 unit="rad"
+  _               :8
+}
+
+# PGN 128259 — Speed, Water Referenced
+pgn 128259 "Speed Water Referenced" {
+  sid           uint8      :8
+  speed_water   uint16     :16  scale=0.01 unit="m/s"
+  speed_ground  uint16     :16  scale=0.01 unit="m/s"
+  speed_type    SpeedType  :4
+  _                        :4
+  _                        :8
+}
+
+# PGN 128267 — Water Depth
+pgn 128267 "Water Depth" {
+  sid          uint8   :8
+  depth        uint32  :32  scale=0.01    unit="m"
+  offset       int16   :16  scale=0.001   unit="m"
+  max_range    uint32  :32  scale=0.01    unit="m"
+}
+
+# PGN 129025 — Position, Rapid Update
+pgn 129025 "Position Rapid Update" {
+  latitude   int32  :32  scale=1e-7 unit="deg"
+  longitude  int32  :32  scale=1e-7 unit="deg"
+}
+
+# PGN 129026 — COG & SOG, Rapid Update
+pgn 129026 "COG SOG Rapid Update" {
+  sid                  uint8               :8
+  cog_reference        HeadingReference    :2
+  _                                        :6
+  cog                  uint16              :16  scale=0.0001 unit="rad"
+  sog                  uint16              :16  scale=0.01   unit="m/s"
+  _                                        :16
+}
+
+# PGN 129029 — GNSS Position Data (fast-packet)
+pgn 129029 "GNSS Position Data" {
+  sid              uint8   :8
+  days_since_1970  uint16  :16
+  seconds_today    uint32  :32  scale=0.0001 unit="s"
+  latitude         int64   :64  scale=1e-16  unit="deg"
+  longitude        int64   :64  scale=1e-16  unit="deg"
+  altitude         int64   :64  scale=1e-6   unit="m"
+  gnss_type        uint8   :4
+  gnss_method      uint8   :4
+  integrity        uint8   :2
+  _                         :6
+  num_svs          uint8   :8
+  hdop             int16   :16  scale=0.01
+  pdop             int16   :16  scale=0.01
+  geoidal_sep      int32   :32  scale=0.01   unit="m"
+  num_ref_stations uint8   :8
+}
+
+# PGN 129283 — Cross Track Error
+pgn 129283 "Cross Track Error" {
+  sid       uint8   :8
+  xte_mode  uint8   :4
+  _                  :2
+  nav_term  uint8   :2
+  xte       int32   :32  scale=0.01 unit="m"
+  _                  :16
+}
+
+# PGN 129284 — Navigation Data (fast-packet)
+pgn 129284 "Navigation Data" {
+  sid                        uint8   :8
+  distance_to_wp             uint32  :32  scale=0.01    unit="m"
+  bearing_reference          DirectionReference :2
+  perp_crossed               uint8   :2
+  arrival_circle_entered     uint8   :2
+  calc_type                  uint8   :2
+  eta_time                   uint32  :32  scale=0.0001  unit="s"
+  eta_date                   uint16  :16
+  bearing_origin_to_dest     uint16  :16  scale=0.0001  unit="rad"
+  bearing_position_to_dest   uint16  :16  scale=0.0001  unit="rad"
+  origin_wp_number           uint32  :32
+  dest_wp_number             uint32  :32
+  dest_latitude              int32   :32  scale=1e-7    unit="deg"
+  dest_longitude             int32   :32  scale=1e-7    unit="deg"
+  wp_closing_velocity        int16   :16  scale=0.01    unit="m/s"
+}

@@ -1,0 +1,35 @@
+# System & Protocol PGNs
+
+# PGN 60928 — ISO Address Claim
+pgn 60928 "ISO Address Claim" {
+  unique_number      uint32  :21
+  manufacturer_code  uint16  :11
+  device_instance    uint8   :8
+  device_function    uint8   :8
+  _                           :1
+  device_class       uint8   :7
+  system_instance    uint8   :4
+  industry_group     uint8   :3
+  arbitrary_address  uint8   :1
+}
+
+# PGN 126996 — Product Information (fast-packet)
+pgn 126996 "Product Information" {
+  nmea_version       uint16  :16
+  product_code       uint16  :16
+  model_id           string  :256   # 32 bytes
+  software_version   string  :320   # 40 bytes
+  model_version      string  :192   # 24 bytes
+  model_serial       string  :256   # 32 bytes
+  cert_level         uint8   :8
+  load_equiv         uint8   :8
+}
+
+# PGN 126992 — System Time
+pgn 126992 "System Time" {
+  sid              uint8   :8
+  time_source      uint8   :4
+  _                         :4
+  days_since_1970  uint16  :16
+  seconds_today    uint32  :32  scale=0.0001  unit="s"
+}

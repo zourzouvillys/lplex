@@ -1,0 +1,104 @@
+# Environment PGNs
+
+enum TemperatureSource {
+  0 = "sea"
+  1 = "outside"
+  2 = "inside"
+  3 = "engine_room"
+  4 = "main_cabin"
+  5 = "live_well"
+  6 = "bait_well"
+  7 = "refrigeration"
+  8 = "heating_system"
+  9 = "dew_point"
+  10 = "apparent_wind_chill"
+  11 = "theoretical_wind_chill"
+  12 = "heat_index"
+  13 = "freezer"
+  14 = "exhaust_gas"
+}
+
+enum HumiditySource {
+  0 = "inside"
+  1 = "outside"
+}
+
+enum PressureSource {
+  0 = "atmospheric"
+  1 = "water"
+  2 = "steam"
+  3 = "compressed_air"
+  4 = "hydraulic"
+  5 = "filter"
+  6 = "altimeter"
+  7 = "oil"
+  8 = "fuel"
+}
+
+# PGN 130306 — Wind Data
+pgn 130306 "Wind Data" {
+  sid              uint8          :8
+  wind_speed       uint16         :16  scale=0.01   unit="m/s"
+  wind_angle       uint16         :16  scale=0.0001 unit="rad"
+  wind_reference   WindReference  :3
+  _                                :5
+  _                                :16
+}
+
+# PGN 130310 — Environmental Parameters (Outside)
+pgn 130310 "Environmental Parameters Outside" {
+  sid                    uint8   :8
+  water_temperature      uint16  :16  scale=0.01    unit="K"
+  outside_temperature    uint16  :16  scale=0.01    unit="K"
+  atmospheric_pressure   uint16  :16  scale=100     unit="Pa"
+  _                               :16
+}
+
+# PGN 130311 — Environmental Parameters (Inside)
+pgn 130311 "Environmental Parameters Inside" {
+  sid                    uint8             :8
+  temperature_source     TemperatureSource :6
+  humidity_source        HumiditySource    :2
+  temperature            uint16            :16  scale=0.01   unit="K"
+  humidity               int16             :16  scale=0.004  unit="%"
+  atmospheric_pressure   uint16            :16  scale=100    unit="Pa"
+  _                                         :8
+}
+
+# PGN 130312 — Temperature
+pgn 130312 "Temperature" {
+  sid                  uint8             :8
+  instance             uint8             :8
+  temperature_source   TemperatureSource :8
+  actual_temperature   uint16            :16  scale=0.01 unit="K"
+  set_temperature      uint16            :16  scale=0.01 unit="K"
+  _                                       :8
+}
+
+# PGN 130313 — Humidity
+pgn 130313 "Humidity" {
+  sid               uint8           :8
+  instance          uint8           :8
+  humidity_source   HumiditySource  :8
+  actual_humidity   uint16          :16  scale=0.004  unit="%"
+  set_humidity      uint16          :16  scale=0.004  unit="%"
+  _                                  :8
+}
+
+# PGN 130314 — Actual Pressure
+pgn 130314 "Actual Pressure" {
+  sid               uint8           :8
+  instance          uint8           :8
+  pressure_source   PressureSource  :8
+  pressure          uint32          :32  scale=0.1    unit="Pa"
+  _                                  :8
+}
+
+# PGN 130316 — Temperature Extended Range
+pgn 130316 "Temperature Extended Range" {
+  sid                  uint8             :8
+  instance             uint8             :8
+  temperature_source   TemperatureSource :8
+  actual_temperature   uint32            :24  scale=0.001 unit="K"
+  set_temperature      uint16            :16  scale=0.1   unit="K"
+}

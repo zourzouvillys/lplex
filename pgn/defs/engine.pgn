@@ -1,0 +1,83 @@
+# Engine & Electrical PGNs
+
+# PGN 127488 — Engine Parameters, Rapid Update
+pgn 127488 "Engine Parameters Rapid Update" {
+  engine_instance    uint8   :8
+  engine_speed       uint16  :16  scale=0.25   unit="rpm"
+  engine_boost       uint16  :16  scale=100    unit="Pa"
+  engine_tilt_trim   int8    :8
+  _                           :16
+}
+
+# PGN 127489 — Engine Parameters, Dynamic
+pgn 127489 "Engine Parameters Dynamic" {
+  engine_instance          uint8   :8
+  oil_pressure             uint16  :16  scale=100    unit="Pa"
+  oil_temperature          uint16  :16  scale=0.1    unit="K"
+  temperature              uint16  :16  scale=0.01   unit="K"
+  alternator_potential     int16   :16  scale=0.01   unit="V"
+  fuel_rate                int16   :16  scale=0.1    unit="L/h"
+  total_engine_hours       uint32  :32  scale=1      unit="s"
+  coolant_pressure         uint16  :16  scale=100    unit="Pa"
+  fuel_pressure            uint16  :16  scale=1000   unit="Pa"
+  _                                 :8
+  discrete_status_1        uint16  :16
+  discrete_status_2        uint16  :16
+  percent_engine_load      int8    :8   unit="%"
+  percent_engine_torque    int8    :8   unit="%"
+}
+
+# PGN 127505 — Fluid Level
+pgn 127505 "Fluid Level" {
+  instance    uint8   :4
+  fluid_type  uint8   :4
+  level       int16   :16  scale=0.004 unit="%"
+  capacity    uint32  :32  scale=0.1   unit="L"
+  _                    :8
+}
+
+# PGN 127508 — Battery Status
+pgn 127508 "Battery Status" {
+  instance       uint8   :8
+  voltage        uint16  :16  scale=0.01  unit="V"
+  current        int16   :16  scale=0.1   unit="A"
+  temperature    uint16  :16  scale=0.01  unit="K"
+  sid            uint8   :8
+}
+
+# PGN 127513 — Battery Configuration Status
+pgn 127513 "Battery Configuration Status" {
+  instance             uint8   :8
+  battery_type         uint8   :4
+  supports_equal       uint8   :2
+  _                             :2
+  nominal_voltage      uint16  :16  scale=0.01  unit="V"
+  nominal_capacity     uint16  :16  scale=1     unit="Ah"
+  temperature_coeff    uint8   :8   unit="%"
+  peukert_exponent     int16   :16  scale=0.002
+  charge_eff_factor    int16   :16  scale=1     unit="%"
+}
+
+# PGN 127506 — DC Detailed Status
+pgn 127506 "DC Detailed Status" {
+  sid                uint8   :8
+  instance           uint8   :8
+  dc_type            uint8   :8
+  state_of_charge    uint8   :8   unit="%"
+  state_of_health    uint8   :8   unit="%"
+  time_remaining     uint16  :16  scale=60     unit="s"
+  ripple_voltage     uint16  :16  scale=0.001  unit="V"
+  capacity_remaining uint16  :16  scale=1      unit="Ah"
+}
+
+# PGN 127507 — Charger Status
+pgn 127507 "Charger Status" {
+  instance             uint8   :8
+  battery_instance     uint8   :8
+  operating_state      uint8   :4
+  charge_mode          uint8   :4
+  charger_enable       uint8   :2
+  equalization_pending uint8   :2
+  _                             :4
+  equalization_time    uint16  :16  scale=60 unit="s"
+}

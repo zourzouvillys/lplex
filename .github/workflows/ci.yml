@@ -19,6 +19,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Generate
+        run: go generate ./pgn/...
+
       - name: Test
         run: go test ./... -v -count=1 -race
 
@@ -33,6 +36,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      - name: Generate
+        run: go generate ./pgn/...
 
       - uses: golangci/golangci-lint-action@v7
         with:
