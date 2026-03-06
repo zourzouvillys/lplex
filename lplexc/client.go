@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -17,13 +18,22 @@ import (
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+	logger     *slog.Logger
+	backoff    BackoffConfig
 }
 
 // NewClient creates a new lplex client pointing at the given server URL.
-func NewClient(baseURL string) *Client {
+// Options configure connection pooling, logging, and reconnect behavior.
+func NewClient(baseURL string, opts ...ClientOption) *Client {
+	cfg := defaultConfig()
+	for _, o := range opts {
+		o(&cfg)
+	}
 	return &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),
-		httpClient: http.DefaultClient,
+		httpClient: cfg.httpClient,
+		logger:     cfg.logger,
+		backoff:    cfg.reconnectBackoff,
 	}
 }
 
