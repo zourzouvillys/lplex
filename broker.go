@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -204,6 +205,10 @@ type Broker struct {
 
 	journalDir  string
 	replicaMode bool // when true, honor frame.Seq instead of auto-incrementing
+
+	// metrics counters (lock-free)
+	frameCount    atomic.Uint64
+	lastFrameNano atomic.Int64 // UnixNano of most recent frame
 }
 
 // TxRequest is a frame to write to the CAN bus.
@@ -412,6 +417,10 @@ func (b *Broker) handleFrame(frame RxFrame) {
 		b.tail = b.head - uint64(b.ringMask+1)
 	}
 	b.mu.Unlock()
+
+	// Update metrics counters.
+	b.frameCount.Add(1)
+	b.lastFrameNano.Store(frame.Timestamp.UnixNano())
 
 	// Track last-seen value per (source, PGN).
 	b.values.Record(frame.Header.Source, frame.Header.PGN, frame.Timestamp, frame.Data, seq)
@@ -679,4 +688,55 @@ func (b *Broker) Devices() *DeviceRegistry {
 // Values returns the broker's last-values store.
 func (b *Broker) Values() *ValueStore {
 	return b.values
+}
+
+// BrokerStats is a point-in-time snapshot of broker metrics.
+type BrokerStats struct {
+	FramesTotal      uint64    // total frames processed
+	LastFrameTime    time.Time // timestamp of most recent frame (zero if none)
+	RingEntries      uint64    // current entries in ring buffer
+	RingCapacity     int       // ring buffer size
+	HeadSeq          uint64    // next sequence number
+	ActiveSessions   int       // buffered client sessions
+	ActiveSubscribers int      // ephemeral SSE subscribers
+	ActiveConsumers  int       // pull-based consumers
+	DeviceCount      int       // discovered NMEA 2000 devices
+}
+
+// Stats returns a point-in-time snapshot of broker metrics.
+func (b *Broker) Stats() BrokerStats {
+	b.mu.RLock()
+	head := b.head
+	tail := b.tail
+	ringCap := b.ringMask + 1
+	b.mu.RUnlock()
+
+	b.sessionMu.RLock()
+	sessions := len(b.sessions)
+	b.sessionMu.RUnlock()
+
+	b.subscriberMu.RLock()
+	subscribers := len(b.subscribers)
+	b.subscriberMu.RUnlock()
+
+	b.consumerMu.RLock()
+	consumers := len(b.consumers)
+	b.consumerMu.RUnlock()
+
+	var lastFrame time.Time
+	if nano := b.lastFrameNano.Load(); nano != 0 {
+		lastFrame = time.Unix(0, nano)
+	}
+
+	return BrokerStats{
+		FramesTotal:       b.frameCount.Load(),
+		LastFrameTime:     lastFrame,
+		RingEntries:       head - tail,
+		RingCapacity:      ringCap,
+		HeadSeq:           head,
+		ActiveSessions:    sessions,
+		ActiveSubscribers: subscribers,
+		ActiveConsumers:   consumers,
+		DeviceCount:       len(b.devices.Snapshot()),
+	}
 }

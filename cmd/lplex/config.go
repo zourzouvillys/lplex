@@ -32,6 +32,7 @@ var configToFlag = map[string]string{
 	"replication.tls.cert":       "replication-tls-cert",
 	"replication.tls.key":        "replication-tls-key",
 	"replication.tls.ca":         "replication-tls-ca",
+	"health.bus-silence-threshold": "bus-silence-threshold",
 }
 
 // findConfigFile resolves which config file to use.
