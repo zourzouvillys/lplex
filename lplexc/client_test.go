@@ -80,7 +80,7 @@ func TestDevices(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(devices)
+		_ = json.NewEncoder(w).Encode(devices)
 	}))
 	defer srv.Close()
 
@@ -108,7 +108,7 @@ func TestSubscribeAndNext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sub.Close()
+	defer func() { _ = sub.Close() }()
 
 	ev, err := sub.Next()
 	if err != nil {
