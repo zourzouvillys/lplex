@@ -7,8 +7,9 @@ package pgngen
 
 // Schema is the top-level AST node containing all parsed definitions.
 type Schema struct {
-	Enums []EnumDef
-	PGNs  []PGNDef
+	Enums   []EnumDef
+	Lookups []LookupDef
+	PGNs    []PGNDef
 }
 
 // EnumDef defines a named enumeration used by lookup fields.
@@ -22,6 +23,22 @@ type EnumDef struct {
 type EnumValue struct {
 	Value int
 	Name  string
+}
+
+// LookupDef defines a named lookup table mapping integer keys to human-readable names.
+// Unlike enums, lookups don't change the field's Go type; the field stays its raw integer type
+// and gets a Name() method for human-readable display.
+type LookupDef struct {
+	Name    string // e.g. "VictronRegister"
+	KeyType string // Go type: "uint8", "uint16", "uint32", "uint64"
+	Values  []LookupValue
+	Line    int // source line for error reporting
+}
+
+// LookupValue is a single entry in a lookup table.
+type LookupValue struct {
+	Key  int64
+	Name string
 }
 
 // PGNDef defines a single PGN packet layout.
@@ -58,6 +75,7 @@ type FieldDef struct {
 	Unit       string    // human-readable unit (e.g. "deg", "m/s")
 	Desc       string    // optional description
 	EnumRef    string    // enum type name (non-empty when Type == TypeEnum)
+	LookupRef  string    // lookup table name (non-empty when lookup= is set)
 	Signed     bool      // true for int types
 	MatchValue *int64    // when set, this field must equal this value (dispatch discriminator)
 	Line       int       // source line for error reporting
@@ -92,6 +110,23 @@ func (s *Schema) Resolve() error {
 	for _, e := range s.Enums {
 		enumSet[e.Name] = true
 	}
+
+	lookupSet := make(map[string]bool, len(s.Lookups))
+	for _, l := range s.Lookups {
+		lookupSet[l.Name] = true
+		// Validate no duplicate keys within a lookup.
+		seen := make(map[int64]bool, len(l.Values))
+		for _, v := range l.Values {
+			if seen[v.Key] {
+				return &ResolveError{
+					Line:    l.Line,
+					Message: "lookup " + l.Name + ": duplicate key " + itoa(v.Key),
+				}
+			}
+			seen[v.Key] = true
+		}
+	}
+
 	for i := range s.PGNs {
 		offset := 0
 		for j := range s.PGNs[i].Fields {
@@ -102,6 +137,12 @@ func (s *Schema) Resolve() error {
 				return &ResolveError{
 					Line:    f.Line,
 					Message: "unknown enum type: " + f.EnumRef,
+				}
+			}
+			if f.LookupRef != "" && !lookupSet[f.LookupRef] {
+				return &ResolveError{
+					Line:    f.Line,
+					Message: "unknown lookup type: " + f.LookupRef,
 				}
 			}
 		}

@@ -50,6 +50,13 @@ func GenerateProto(s *Schema, pkg string) string {
 			if f.Unit != "" {
 				comment = fmt.Sprintf(" // %s", f.Unit)
 			}
+			if f.LookupRef != "" {
+				if comment == "" {
+					comment = fmt.Sprintf(" // see %s lookup", f.LookupRef)
+				} else {
+					comment += fmt.Sprintf("; see %s lookup", f.LookupRef)
+				}
+			}
 			fmt.Fprintf(&b, "  %s %s = %d;%s\n",
 				protoType, toSnake(f.Name), fieldNum, comment)
 			fieldNum++

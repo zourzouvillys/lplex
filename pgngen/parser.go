@@ -41,6 +41,7 @@ func ParseFiles(sources map[string]string) (*Schema, error) {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
 		merged.Enums = append(merged.Enums, s.Enums...)
+		merged.Lookups = append(merged.Lookups, s.Lookups...)
 		merged.PGNs = append(merged.PGNs, s.PGNs...)
 	}
 	if err := merged.Resolve(); err != nil {
@@ -70,6 +71,12 @@ func (p *parser) parse() (*Schema, error) {
 				return nil, err
 			}
 			s.Enums = append(s.Enums, e)
+		case "lookup":
+			l, err := p.parseLookup(tokens)
+			if err != nil {
+				return nil, err
+			}
+			s.Lookups = append(s.Lookups, l)
 		case "pgn":
 			d, err := p.parsePGN(tokens)
 			if err != nil {
@@ -114,6 +121,47 @@ func (p *parser) parseEnum(tokens []string) (EnumDef, error) {
 		p.pos++
 	}
 	return EnumDef{}, p.errorf("unterminated enum block")
+}
+
+var validLookupKeyTypes = map[string]bool{
+	"uint8": true, "uint16": true, "uint32": true, "uint64": true,
+}
+
+func (p *parser) parseLookup(tokens []string) (LookupDef, error) {
+	// lookup <Name> <type> {
+	if len(tokens) < 4 || tokens[3] != "{" {
+		return LookupDef{}, p.errorf("expected: lookup <Name> <type> {")
+	}
+	keyType := tokens[2]
+	if !validLookupKeyTypes[keyType] {
+		return LookupDef{}, p.errorf("invalid lookup key type %q (must be uint8, uint16, uint32, or uint64)", keyType)
+	}
+	l := LookupDef{Name: tokens[1], KeyType: keyType, Line: p.lineNum()}
+	p.pos++
+	for p.pos < len(p.lines) {
+		line := p.stripComment(p.lines[p.pos])
+		toks := tokenize(line)
+		if len(toks) == 0 {
+			p.pos++
+			continue
+		}
+		if toks[0] == "}" {
+			p.pos++
+			return l, nil
+		}
+		// <key> = "<name>"
+		if len(toks) < 3 || toks[1] != "=" {
+			return LookupDef{}, p.errorf("expected: <key> = \"<name>\"")
+		}
+		key, err := strconv.ParseInt(toks[0], 0, 64)
+		if err != nil {
+			return LookupDef{}, p.errorf("invalid lookup key: %s", toks[0])
+		}
+		name := unquote(toks[2])
+		l.Values = append(l.Values, LookupValue{Key: key, Name: name})
+		p.pos++
+	}
+	return LookupDef{}, p.errorf("unterminated lookup block")
 }
 
 func (p *parser) parsePGN(tokens []string) (PGNDef, error) {
@@ -223,6 +271,11 @@ func (p *parser) parseField(tokens []string) (FieldDef, error) {
 				return FieldDef{}, p.errorf("field %s: invalid value %q", f.Name, v)
 			}
 			f.MatchValue = &val
+		case "lookup":
+			if f.IsReserved() {
+				return FieldDef{}, p.errorf("reserved field cannot have lookup= attribute")
+			}
+			f.LookupRef = unquote(v)
 		default:
 			return FieldDef{}, p.errorf("field %s: unknown attribute %q", f.Name, k)
 		}

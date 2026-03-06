@@ -79,6 +79,17 @@ func GenerateGo(s *Schema, pkg string) string {
 		b.WriteString("\t}\n}\n\n")
 	}
 
+	// Lookup tables
+	for _, l := range s.Lookups {
+		varName := toLowerCamel(l.Name) + "Names"
+		fmt.Fprintf(&b, "// %s maps %s keys to human-readable names.\n", varName, l.Name)
+		fmt.Fprintf(&b, "var %s = map[%s]string{\n", varName, l.KeyType)
+		for _, v := range l.Values {
+			fmt.Fprintf(&b, "\t0x%X: %q,\n", uint64(v.Key), v.Name)
+		}
+		b.WriteString("}\n\n")
+	}
+
 	// Group PGNs by number to detect dispatch groups.
 	type pgnGroup struct {
 		indices []int
@@ -95,9 +106,16 @@ func GenerateGo(s *Schema, pkg string) string {
 		g.indices = append(g.indices, i)
 	}
 
+	// Build lookup set for quick access during method generation.
+	lookupMap := make(map[string]*LookupDef, len(s.Lookups))
+	for i := range s.Lookups {
+		lookupMap[s.Lookups[i].Name] = &s.Lookups[i]
+	}
+
 	// PGN structs and decode/encode for every variant.
 	for _, p := range s.PGNs {
 		writeVariant(&b, p)
+		writeLookupMethods(&b, p, lookupMap)
 	}
 
 	// Dispatch functions for PGN groups that need value-based routing.
@@ -232,6 +250,26 @@ func writeVariant(b *strings.Builder, p PGNDef) {
 	}
 	b.WriteString("\treturn data\n")
 	b.WriteString("}\n\n")
+}
+
+// writeLookupMethods generates <FieldName>Name() methods for fields with lookup= references.
+func writeLookupMethods(b *strings.Builder, p PGNDef, lookupMap map[string]*LookupDef) {
+	structName := toPascal(p.Description)
+	for _, f := range p.Fields {
+		if f.LookupRef == "" {
+			continue
+		}
+		l := lookupMap[f.LookupRef]
+		if l == nil {
+			continue
+		}
+		varName := toLowerCamel(l.Name) + "Names"
+		methodName := toPascal(f.Name) + "Name"
+		fmt.Fprintf(b, "// %s returns the human-readable name for this field's value, or empty if unknown.\n", methodName)
+		fmt.Fprintf(b, "func (m %s) %s() string {\n", structName, methodName)
+		fmt.Fprintf(b, "\treturn %s[m.%s]\n", varName, toPascal(f.Name))
+		b.WriteString("}\n\n")
+	}
 }
 
 // writeEncodeConstrained emits Go code to encode a literal value into the field's bit position.

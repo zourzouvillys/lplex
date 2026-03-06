@@ -56,6 +56,17 @@ func toSnake(s string) string {
 	return strings.TrimRight(b.String(), "_")
 }
 
+// toLowerCamel converts "VictronRegister" or "wind_speed" to "victronRegister" or "windSpeed".
+func toLowerCamel(s string) string {
+	p := toPascal(s)
+	if p == "" {
+		return ""
+	}
+	r := []rune(p)
+	r[0] = unicode.ToLower(r[0])
+	return string(r)
+}
+
 // toScreamingSnake converts "WindReference" or "true_north" to "WIND_REFERENCE" or "TRUE_NORTH".
 func toScreamingSnake(s string) string {
 	return strings.ToUpper(toSnake(s))

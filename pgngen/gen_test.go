@@ -457,6 +457,192 @@ pgn 61184 "Test" {
 	}
 }
 
+func TestParseLookup(t *testing.T) {
+	src := `
+lookup VictronRegister uint16 {
+  0x0100 = "Product ID"
+  0x0200 = "Device Mode"
+  255    = "Decimal Key"
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Lookups) != 1 {
+		t.Fatalf("got %d lookups, want 1", len(s.Lookups))
+	}
+	l := s.Lookups[0]
+	if l.Name != "VictronRegister" {
+		t.Errorf("name = %q, want VictronRegister", l.Name)
+	}
+	if l.KeyType != "uint16" {
+		t.Errorf("key type = %q, want uint16", l.KeyType)
+	}
+	if len(l.Values) != 3 {
+		t.Fatalf("got %d values, want 3", len(l.Values))
+	}
+	if l.Values[0].Key != 0x0100 {
+		t.Errorf("first key = %d, want %d", l.Values[0].Key, 0x0100)
+	}
+	if l.Values[0].Name != "Product ID" {
+		t.Errorf("first name = %q, want Product ID", l.Values[0].Name)
+	}
+	if l.Values[2].Key != 255 {
+		t.Errorf("third key = %d, want 255", l.Values[2].Key)
+	}
+}
+
+func TestParseLookupOnReservedField(t *testing.T) {
+	src := `
+lookup Foo uint8 {
+  1 = "one"
+}
+
+pgn 99999 "Test" {
+  _  :8  lookup=Foo
+}
+`
+	_, err := Parse(src)
+	if err == nil {
+		t.Fatal("expected error for lookup= on reserved field")
+	}
+	if !strings.Contains(err.Error(), "reserved field cannot have lookup=") {
+		t.Errorf("error = %q, want substring about reserved field", err.Error())
+	}
+}
+
+func TestParseLookupUnknownRef(t *testing.T) {
+	src := `
+pgn 99999 "Test" {
+  register_id  uint16  :16  lookup=NonExistent
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Resolve()
+	if err == nil {
+		t.Fatal("expected error for unknown lookup reference")
+	}
+	if !strings.Contains(err.Error(), "unknown lookup type: NonExistent") {
+		t.Errorf("error = %q, want substring about unknown lookup", err.Error())
+	}
+}
+
+func TestParseLookupDuplicateKey(t *testing.T) {
+	src := `
+lookup Dup uint16 {
+  0x01 = "First"
+  0x01 = "Second"
+}
+
+pgn 99999 "Test" {
+  x  uint16  :16  lookup=Dup
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.Resolve()
+	if err == nil {
+		t.Fatal("expected error for duplicate lookup key")
+	}
+	if !strings.Contains(err.Error(), "duplicate key") {
+		t.Errorf("error = %q, want substring about duplicate key", err.Error())
+	}
+}
+
+func TestGenerateGoLookup(t *testing.T) {
+	src := `
+lookup StatusCode uint8 {
+  0x01 = "Active"
+  0x02 = "Standby"
+}
+
+pgn 99999 "Test Device" {
+  status  uint8  :8  lookup=StatusCode
+  value   uint16 :16
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	code := GenerateGo(s, "pgn")
+
+	// Lookup map should exist.
+	if !strings.Contains(code, "var statusCodeNames = map[uint8]string{") {
+		t.Error("missing statusCodeNames map")
+	}
+	if !strings.Contains(code, `0x1: "Active"`) {
+		t.Error("missing Active entry in lookup map")
+	}
+	if !strings.Contains(code, `0x2: "Standby"`) {
+		t.Error("missing Standby entry in lookup map")
+	}
+
+	// Method should exist on the struct.
+	if !strings.Contains(code, "func (m TestDevice) StatusName() string {") {
+		t.Error("missing StatusName method")
+	}
+	if !strings.Contains(code, "return statusCodeNames[m.Status]") {
+		t.Error("StatusName method should index into statusCodeNames")
+	}
+}
+
+func TestGenerateGoLookupNoRef(t *testing.T) {
+	src := `
+lookup OrphanLookup uint16 {
+  0x01 = "One"
+}
+
+pgn 99999 "Test Device" {
+  value  uint16  :16
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	code := GenerateGo(s, "pgn")
+
+	// Lookup map should still be generated even without a field reference.
+	if !strings.Contains(code, "var orphanLookupNames = map[uint16]string{") {
+		t.Error("missing orphanLookupNames map (unreferenced lookup should still be generated)")
+	}
+
+	// No method should be generated since no field references it.
+	if strings.Contains(code, "Name() string") {
+		t.Error("unexpected Name method for unreferenced lookup")
+	}
+}
+
+func TestParseLookupInvalidKeyType(t *testing.T) {
+	src := `
+lookup Bad string {
+  1 = "one"
+}
+`
+	_, err := Parse(src)
+	if err == nil {
+		t.Fatal("expected error for invalid lookup key type")
+	}
+	if !strings.Contains(err.Error(), "invalid lookup key type") {
+		t.Errorf("error = %q, want substring about invalid key type", err.Error())
+	}
+}
+
 func TestNaming(t *testing.T) {
 	tests := []struct {
 		input    string

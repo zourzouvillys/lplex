@@ -562,6 +562,32 @@ pgn 127250 "Vessel Heading" {
 }
 ```
 
+### Lookups
+
+Lookup tables map integer keys to human-readable names. Unlike enums, lookups don't change the field's Go type; the field stays its raw integer type and gets a `Name()` method for display.
+
+```
+lookup VictronRegister uint16 {
+  0x0100 = "Product ID"
+  0x0200 = "Device Mode"
+  0xED8F = "DC Channel 1 Current"
+}
+
+pgn 61184 "Victron Battery Register" {
+  manufacturer_code  uint16  :11  value=358
+  _                          :2
+  industry_code      uint8   :3
+  register_id        uint16  :16  lookup=VictronRegister
+  payload            uint32  :32
+}
+```
+
+The generator produces:
+- A `map[uint16]string` variable (`victronRegisterNames`) with all key-name pairs
+- A `RegisterIdName() string` method on the struct that returns the human-readable name (or empty string if unknown)
+
+Keys support hex (`0xFF`) and decimal (`255`) literals. Valid key types: `uint8`, `uint16`, `uint32`, `uint64`.
+
 ### Variant dispatch (`value=`)
 
 Some PGN numbers (notably 61184, Proprietary Single Frame) carry different payloads depending on a discriminator field value. The DSL supports this by allowing multiple `pgn` blocks with the same number, differentiated by `value=` constraints on a shared discriminator field.

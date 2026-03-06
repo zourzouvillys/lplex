@@ -48,6 +48,13 @@ func GenerateJSONSchema(s *Schema) string {
 			if f.Desc != "" {
 				prop["description"] = f.Desc
 			}
+			if f.LookupRef != "" {
+				if desc, ok := prop["description"].(string); ok {
+					prop["description"] = desc + "; see " + f.LookupRef + " lookup"
+				} else {
+					prop["description"] = "see " + f.LookupRef + " lookup"
+				}
+			}
 			props[fieldName] = prop
 			required = append(required, fieldName)
 		}

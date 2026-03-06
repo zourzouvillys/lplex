@@ -26,8 +26,8 @@ func TestDecodeVictronSOC(t *testing.T) {
 	if m.RegisterId != 0x0FFF {
 		t.Errorf("RegisterId = 0x%04X, want 0x0FFF", m.RegisterId)
 	}
-	if m.RegisterName() != "State of Charge" {
-		t.Errorf("RegisterName() = %q, want %q", m.RegisterName(), "State of Charge")
+	if m.RegisterIdName() != "State of Charge" {
+		t.Errorf("RegisterIdName() = %q, want %q", m.RegisterIdName(), "State of Charge")
 	}
 	if m.Payload != 10000 {
 		t.Errorf("Payload = %d, want 10000", m.Payload)
@@ -48,8 +48,8 @@ func TestDecodeVictronCurrent(t *testing.T) {
 	if m.RegisterId != 0xED8F {
 		t.Errorf("RegisterId = 0x%04X, want 0xED8F", m.RegisterId)
 	}
-	if m.RegisterName() != "DC Channel 1 Current" {
-		t.Errorf("RegisterName() = %q, want %q", m.RegisterName(), "DC Channel 1 Current")
+	if m.RegisterIdName() != "DC Channel 1 Current" {
+		t.Errorf("RegisterIdName() = %q, want %q", m.RegisterIdName(), "DC Channel 1 Current")
 	}
 	if m.Payload != 33 {
 		t.Errorf("Payload = %d, want 33", m.Payload)
@@ -70,8 +70,8 @@ func TestDecodeVictronDeviceMode(t *testing.T) {
 	if m.RegisterId != 0x0200 {
 		t.Errorf("RegisterId = 0x%04X, want 0x0200", m.RegisterId)
 	}
-	if m.RegisterName() != "Device Mode" {
-		t.Errorf("RegisterName() = %q, want %q", m.RegisterName(), "Device Mode")
+	if m.RegisterIdName() != "Device Mode" {
+		t.Errorf("RegisterIdName() = %q, want %q", m.RegisterIdName(), "Device Mode")
 	}
 	if m.Payload != 3 {
 		t.Errorf("Payload = %d, want 3", m.Payload)
@@ -92,8 +92,8 @@ func TestDecodeVictronDischargeSinceFull(t *testing.T) {
 	if m.RegisterId != 0xEEFF {
 		t.Errorf("RegisterId = 0x%04X, want 0xEEFF", m.RegisterId)
 	}
-	if m.RegisterName() != "Discharge Since Full" {
-		t.Errorf("RegisterName() = %q, want %q", m.RegisterName(), "Discharge Since Full")
+	if m.RegisterIdName() != "Discharge Since Full" {
+		t.Errorf("RegisterIdName() = %q, want %q", m.RegisterIdName(), "Discharge Since Full")
 	}
 }
 
@@ -111,8 +111,8 @@ func TestDecodeVictronUnknownRegister(t *testing.T) {
 	if m.RegisterId != 0x0301 {
 		t.Errorf("RegisterId = 0x%04X, want 0x0301", m.RegisterId)
 	}
-	if m.RegisterName() != "" {
-		t.Errorf("RegisterName() = %q, want empty", m.RegisterName())
+	if m.RegisterIdName() != "" {
+		t.Errorf("RegisterIdName() = %q, want empty", m.RegisterIdName())
 	}
 }
 

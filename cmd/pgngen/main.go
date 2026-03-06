@@ -58,7 +58,7 @@ func main() {
 		log.Fatalf("parsing: %v", err)
 	}
 
-	fmt.Printf("parsed %d enums, %d PGN definitions\n", len(schema.Enums), len(schema.PGNs))
+	fmt.Printf("parsed %d enums, %d lookups, %d PGN definitions\n", len(schema.Enums), len(schema.Lookups), len(schema.PGNs))
 
 	// Generate Go
 	if *goDir != "" {
