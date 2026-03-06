@@ -136,6 +136,7 @@ func TestWaterDepthRoundTrip(t *testing.T) {
 		Sid:    0,
 		Depth:  15.25,
 		Offset: -0.5,
+		Range:  100.0,
 	}
 	data := orig.Encode()
 	if len(data) != 8 {
@@ -150,6 +151,9 @@ func TestWaterDepthRoundTrip(t *testing.T) {
 	}
 	if math.Abs(decoded.Offset-(-0.5)) > 0.001 {
 		t.Errorf("offset = %f, want ~-0.5", decoded.Offset)
+	}
+	if math.Abs(decoded.Range-100.0) > 10 {
+		t.Errorf("range = %f, want ~100.0", decoded.Range)
 	}
 }
 
@@ -171,6 +175,10 @@ func TestWaterDepthDecodeAirmarFrame(t *testing.T) {
 	// offset = 0xfaa5 as int16 = -1371 -> -1371 * 0.001 = -1.371m
 	if math.Abs(decoded.Offset-(-1.371)) > 0.001 {
 		t.Errorf("offset = %f, want ~-1.371", decoded.Offset)
+	}
+	// range = 0x0e = 14 -> 14 * 10 = 140m
+	if math.Abs(decoded.Range-140.0) > 0.01 {
+		t.Errorf("range = %f, want 140.0", decoded.Range)
 	}
 }
 

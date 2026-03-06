@@ -79,7 +79,7 @@ pgn 128267 "Water Depth" {
   sid          uint8   :8
   depth        uint32  :32  scale=0.01    unit="m"
   offset       int16   :16  scale=0.001   unit="m"
-  _                    :8
+  range        uint8   :8   scale=10      unit="m"
 }
 
 # PGN 128275 — Distance Log
