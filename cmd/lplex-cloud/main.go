@@ -115,6 +115,7 @@ func main() {
 
 	httpMux := http.NewServeMux()
 	registerCloudHTTP(httpMux, im, replServer, logger)
+	registerCloudMetricsHealth(httpMux, im, replServer)
 
 	// Signal handling
 	ctx, cancel := context.WithCancel(context.Background())
@@ -507,6 +508,78 @@ func buildKeeperConfig(
 		ArchiveTrigger: archiveTrigger,
 		Logger:         logger,
 	}, nil
+}
+
+// registerCloudMetricsHealth adds /metrics and /healthz to the cloud HTTP mux.
+// Cloud metrics aggregate across all instances.
+func registerCloudMetricsHealth(mux *http.ServeMux, im *lplex.InstanceManager, replServer *lplex.ReplicationServer) {
+	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+
+		instances := im.List()
+		fmt.Fprintf(w, "# HELP lplex_cloud_instances_total Number of known instances.\n")
+		fmt.Fprintf(w, "# TYPE lplex_cloud_instances_total gauge\n")
+		fmt.Fprintf(w, "lplex_cloud_instances_total %d\n", len(instances))
+
+		var connected int
+		for _, inst := range instances {
+			if inst.Connected {
+				connected++
+			}
+		}
+		fmt.Fprintf(w, "# HELP lplex_cloud_instances_connected Number of currently connected instances.\n")
+		fmt.Fprintf(w, "# TYPE lplex_cloud_instances_connected gauge\n")
+		fmt.Fprintf(w, "lplex_cloud_instances_connected %d\n", connected)
+
+		// Per-instance metrics.
+		fmt.Fprintf(w, "# HELP lplex_cloud_instance_connected Whether an instance is connected (0/1).\n")
+		fmt.Fprintf(w, "# TYPE lplex_cloud_instance_connected gauge\n")
+		fmt.Fprintf(w, "# HELP lplex_cloud_instance_lag_seqs Replication lag in sequences per instance.\n")
+		fmt.Fprintf(w, "# TYPE lplex_cloud_instance_lag_seqs gauge\n")
+		fmt.Fprintf(w, "# HELP lplex_cloud_instance_cursor Continuous cursor position per instance.\n")
+		fmt.Fprintf(w, "# TYPE lplex_cloud_instance_cursor gauge\n")
+		fmt.Fprintf(w, "# HELP lplex_cloud_instance_holes Number of replication holes per instance.\n")
+		fmt.Fprintf(w, "# TYPE lplex_cloud_instance_holes gauge\n")
+
+		for _, inst := range instances {
+			c := 0
+			if inst.Connected {
+				c = 1
+			}
+			fmt.Fprintf(w, "lplex_cloud_instance_connected{instance=%q} %d\n", inst.ID, c)
+			fmt.Fprintf(w, "lplex_cloud_instance_lag_seqs{instance=%q} %d\n", inst.ID, inst.LagSeqs)
+			fmt.Fprintf(w, "lplex_cloud_instance_cursor{instance=%q} %d\n", inst.ID, inst.Cursor)
+			fmt.Fprintf(w, "lplex_cloud_instance_holes{instance=%q} %d\n", inst.ID, inst.Holes)
+		}
+	})
+
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		instances := im.List()
+		status := "ok"
+
+		var connected int
+		for _, inst := range instances {
+			if inst.Connected {
+				connected++
+			}
+		}
+
+		type cloudHealth struct {
+			Status         string `json:"status"`
+			InstancesTotal int    `json:"instances_total"`
+			InstancesUp    int    `json:"instances_connected"`
+		}
+
+		resp := cloudHealth{
+			Status:         status,
+			InstancesTotal: len(instances),
+			InstancesUp:    connected,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+	})
 }
 
 func corsMiddleware(next http.Handler) http.Handler {

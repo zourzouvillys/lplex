@@ -42,6 +42,7 @@ func main() {
 	retentionOverflowPolicy := flag.String("journal-retention-overflow-policy", "delete-unarchived", "Overflow policy: delete-unarchived or pause-recording")
 	archiveCommand := flag.String("journal-archive-command", "", "Path to archive script")
 	archiveTriggerStr := flag.String("journal-archive-trigger", "", "Archive trigger: on-rotate or before-expire")
+	busSilenceThreshold := flag.String("bus-silence-threshold", "", "Alert on CAN bus silence after this duration (ISO 8601, e.g. PT30S)")
 	replTarget := flag.String("replication-target", "", "Cloud replication gRPC address (host:port)")
 	replInstanceID := flag.String("replication-instance-id", "", "Instance ID for cloud replication")
 	replTLSCert := flag.String("replication-tls-cert", "", "Client certificate for replication mTLS")
@@ -250,6 +251,31 @@ func main() {
 			}
 		})
 	}
+
+	// Register metrics endpoint.
+	var replStatusFn func() *lplex.ReplicationStatus
+	if replClient != nil {
+		replStatusFn = func() *lplex.ReplicationStatus {
+			s := replClient.Status()
+			return &s
+		}
+	}
+	srv.HandleFunc("GET /metrics", lplex.MetricsHandler(broker, replStatusFn))
+
+	// Register health check endpoint.
+	healthCfg := lplex.HealthConfig{
+		Broker:     broker,
+		ReplStatus: replStatusFn,
+	}
+	if *busSilenceThreshold != "" {
+		silenceDur, err := lplex.ParseISO8601Duration(*busSilenceThreshold)
+		if err != nil {
+			logger.Error("invalid bus-silence-threshold", "value", *busSilenceThreshold, "error", err)
+			os.Exit(1)
+		}
+		healthCfg.BusSilenceThreshold = silenceDur
+	}
+	srv.HandleFunc("GET /healthz", lplex.HealthHandler(healthCfg))
 
 	addr := fmt.Sprintf(":%d", *port)
 	httpServer := &http.Server{
