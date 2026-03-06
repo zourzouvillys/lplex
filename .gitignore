@@ -19,6 +19,12 @@ bin/
 # macOS
 .DS_Store
 
+# Generated code (use `go generate ./pgn/...` to regenerate)
+pgn/pgn_gen.go
+pgn/helpers_gen.go
+pgn/proto/
+pgn/schema.json
+
 # Test databases
 *.db
 *.db-shm
