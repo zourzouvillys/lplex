@@ -163,6 +163,257 @@ pgn 59904 "ISO Request" {
 	}
 }
 
+func TestGenerateGoDispatch(t *testing.T) {
+	src := `
+pgn 61184 "Victron Battery Register" {
+  manufacturer_code  uint16  :11  value=358
+  _                          :2
+  industry_code      uint8   :3
+  register_id        uint16  :16
+  payload            uint32  :32
+}
+
+pgn 61184 "Proprietary Single Frame" {
+  manufacturer_code  uint16  :11
+  _                          :2
+  industry_code      uint8   :3
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	code := GenerateGo(s, "pgn")
+
+	// Both variant structs should exist.
+	if !strings.Contains(code, "type VictronBatteryRegister struct") {
+		t.Error("missing VictronBatteryRegister struct")
+	}
+	if !strings.Contains(code, "type ProprietarySingleFrame struct") {
+		t.Error("missing ProprietarySingleFrame struct")
+	}
+
+	// Both variant decoders should exist.
+	if !strings.Contains(code, "func DecodeVictronBatteryRegister(data []byte)") {
+		t.Error("missing DecodeVictronBatteryRegister")
+	}
+	if !strings.Contains(code, "func DecodeProprietarySingleFrame(data []byte)") {
+		t.Error("missing DecodeProprietarySingleFrame")
+	}
+
+	// Dispatch function should exist.
+	if !strings.Contains(code, "func Decode61184(data []byte) (any, error)") {
+		t.Error("missing Decode61184 dispatch function")
+	}
+
+	// Dispatch should switch on manufacturer_code value.
+	if !strings.Contains(code, "case 358:") {
+		t.Error("missing case 358 in dispatch")
+	}
+
+	// Default branch should call the fallback variant.
+	if !strings.Contains(code, "return DecodeProprietarySingleFrame(data)") {
+		t.Error("default case should call DecodeProprietarySingleFrame")
+	}
+
+	// Registry should have a single entry for PGN 61184 using the dispatch function.
+	if !strings.Contains(code, "61184: {PGN: 61184") {
+		t.Error("missing PGN 61184 in registry")
+	}
+	if !strings.Contains(code, "Decode: Decode61184") {
+		t.Error("registry should use Decode61184 dispatch function")
+	}
+	// Registry should use the default variant's description.
+	if !strings.Contains(code, `Description: "Proprietary Single Frame"`) {
+		t.Error("registry description should be from the default (fallback) variant")
+	}
+
+	// Constrained encode: Victron Encode should hardcode manufacturer_code=358.
+	// The encode should use the literal value, not m.ManufacturerCode.
+	encodeStart := strings.Index(code, "func (m *VictronBatteryRegister) Encode()")
+	if encodeStart < 0 {
+		t.Fatal("missing VictronBatteryRegister.Encode")
+	}
+	encodeEnd := strings.Index(code[encodeStart:], "\n}\n")
+	encodeBody := code[encodeStart : encodeStart+encodeEnd]
+	if !strings.Contains(encodeBody, "uint64(358)") {
+		t.Error("VictronBatteryRegister.Encode should hardcode manufacturer_code=358")
+	}
+	if strings.Contains(encodeBody, "m.ManufacturerCode") {
+		t.Error("VictronBatteryRegister.Encode should not read m.ManufacturerCode for constrained field")
+	}
+}
+
+func TestGenerateGoDispatchNoDefault(t *testing.T) {
+	src := `
+pgn 61184 "Victron Register" {
+  manufacturer_code  uint16  :11  value=358
+  _                          :2
+  industry_code      uint8   :3
+  register_id        uint16  :16
+}
+
+pgn 61184 "Garmin Register" {
+  manufacturer_code  uint16  :11  value=229
+  _                          :2
+  industry_code      uint8   :3
+  data               uint32  :32
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	code := GenerateGo(s, "pgn")
+
+	// Without a default variant, unknown discriminator values should return an error.
+	if !strings.Contains(code, `unknown manufacturer_code value`) {
+		t.Error("dispatch without default should return error for unknown discriminator")
+	}
+
+	// Should have both switch cases.
+	if !strings.Contains(code, "case 358:") {
+		t.Error("missing case 358")
+	}
+	if !strings.Contains(code, "case 229:") {
+		t.Error("missing case 229")
+	}
+}
+
+func TestDispatchValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		src     string
+		wantErr string
+	}{
+		{
+			name: "conflicting discriminator position",
+			src: `
+pgn 61184 "Variant A" {
+  manufacturer_code  uint16  :11  value=358
+  _                          :5
+}
+
+pgn 61184 "Variant B" {
+  _                          :3
+  manufacturer_code  uint16  :11  value=229
+  _                          :2
+}
+`,
+			wantErr: "discriminator field mismatch",
+		},
+		{
+			name: "duplicate match value",
+			src: `
+pgn 61184 "Variant A" {
+  manufacturer_code  uint16  :11  value=358
+  _                          :5
+}
+
+pgn 61184 "Variant B" {
+  manufacturer_code  uint16  :11  value=358
+  _                          :5
+}
+`,
+			wantErr: "duplicate match value 358",
+		},
+		{
+			name: "multiple defaults",
+			src: `
+pgn 61184 "Constrained" {
+  manufacturer_code  uint16  :11  value=358
+  _                          :5
+}
+
+pgn 61184 "Default A" {
+  manufacturer_code  uint16  :11
+  _                          :5
+}
+
+pgn 61184 "Default B" {
+  manufacturer_code  uint16  :11
+  _                          :5
+}
+`,
+			wantErr: "multiple default variants",
+		},
+		{
+			name: "no constrained variants",
+			src: `
+pgn 61184 "Only Default" {
+  manufacturer_code  uint16  :11
+  _                          :5
+}
+
+pgn 61184 "Also Default" {
+  manufacturer_code  uint16  :11
+  _                          :5
+}
+`,
+			wantErr: "at least one variant with a value= constraint",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := Parse(tt.src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = s.Resolve()
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParseValueAttribute(t *testing.T) {
+	src := `
+pgn 61184 "Test" {
+  manufacturer_code  uint16  :11  value=358
+  _                          :5
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := s.PGNs[0].Fields[0]
+	if f.MatchValue == nil {
+		t.Fatal("MatchValue should be set")
+	}
+	if *f.MatchValue != 358 {
+		t.Errorf("MatchValue = %d, want 358", *f.MatchValue)
+	}
+}
+
+func TestParseValueOnReservedField(t *testing.T) {
+	src := `
+pgn 61184 "Test" {
+  _  :8  value=5
+}
+`
+	_, err := Parse(src)
+	if err == nil {
+		t.Fatal("expected error for value= on reserved field")
+	}
+	if !strings.Contains(err.Error(), "reserved field cannot have value=") {
+		t.Errorf("error = %q, want substring about reserved field", err.Error())
+	}
+}
+
 func TestNaming(t *testing.T) {
 	tests := []struct {
 		input    string

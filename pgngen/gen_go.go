@@ -79,68 +79,34 @@ func GenerateGo(s *Schema, pkg string) string {
 		b.WriteString("\t}\n}\n\n")
 	}
 
-	// PGN structs and decode/encode
+	// Group PGNs by number to detect dispatch groups.
+	type pgnGroup struct {
+		indices []int
+	}
+	groupOrder := []uint32{}
+	groups := map[uint32]*pgnGroup{}
+	for i, p := range s.PGNs {
+		g, ok := groups[p.PGN]
+		if !ok {
+			g = &pgnGroup{}
+			groups[p.PGN] = g
+			groupOrder = append(groupOrder, p.PGN)
+		}
+		g.indices = append(g.indices, i)
+	}
+
+	// PGN structs and decode/encode for every variant.
 	for _, p := range s.PGNs {
-		structName := toPascal(p.Description)
-		minBytes := minBufferBytes(p)
+		writeVariant(&b, p)
+	}
 
-		// Struct
-		fmt.Fprintf(&b, "// %s represents PGN %d — %s.\n", structName, p.PGN, p.Description)
-		fmt.Fprintf(&b, "type %s struct {\n", structName)
-		for _, f := range p.Fields {
-			if f.IsReserved() {
-				continue
-			}
-			goType := goFieldType(f)
-			tag := fmt.Sprintf("`json:%q`", toSnake(f.Name))
-			comment := ""
-			if f.Unit != "" {
-				comment = " // " + f.Unit
-			}
-			fmt.Fprintf(&b, "\t%s %s %s%s\n", toPascal(f.Name), goType, tag, comment)
+	// Dispatch functions for multi-variant PGN groups.
+	for _, pgn := range groupOrder {
+		g := groups[pgn]
+		if len(g.indices) < 2 {
+			continue
 		}
-		b.WriteString("}\n\n")
-
-		// PGN method
-		fmt.Fprintf(&b, "func (%s) PGN() uint32 { return %d }\n\n", structName, p.PGN)
-
-		// Decode function
-		fmt.Fprintf(&b, "// Decode%s decodes PGN %d from raw bytes.\n", structName, p.PGN)
-		fmt.Fprintf(&b, "func Decode%s(data []byte) (%s, error) {\n", structName, structName)
-		// NMEA 2000 devices may omit trailing fields. Pad short data with
-		// 0xFF (the "not available" fill) so missing fields decode to their
-		// "not available" sentinel values instead of erroring out.
-		fmt.Fprintf(&b, "\tif len(data) < %d {\n", minBytes)
-		fmt.Fprintf(&b, "\t\tpadded := make([]byte, %d)\n", minBytes)
-		fmt.Fprintf(&b, "\t\tfor i := range padded { padded[i] = 0xFF }\n")
-		b.WriteString("\t\tcopy(padded, data)\n")
-		b.WriteString("\t\tdata = padded\n")
-		b.WriteString("\t}\n")
-		fmt.Fprintf(&b, "\tvar m %s\n", structName)
-		for _, f := range p.Fields {
-			if f.IsReserved() {
-				continue
-			}
-			goField := toPascal(f.Name)
-			writeDecodeField(&b, f, goField)
-		}
-		b.WriteString("\treturn m, nil\n")
-		b.WriteString("}\n\n")
-
-		// Encode method
-		fmt.Fprintf(&b, "// Encode serializes %s to raw bytes.\n", structName)
-		fmt.Fprintf(&b, "func (m *%s) Encode() []byte {\n", structName)
-		fmt.Fprintf(&b, "\tdata := make([]byte, %d)\n", minBytes)
-		b.WriteString("\tfor i := range data { data[i] = 0xFF }\n")
-		for _, f := range p.Fields {
-			if f.IsReserved() {
-				continue
-			}
-			goField := toPascal(f.Name)
-			writeEncodeField(&b, f, goField)
-		}
-		b.WriteString("\treturn data\n")
-		b.WriteString("}\n\n")
+		writeDispatchFunc(&b, s, pgn, g.indices)
 	}
 
 	// Registry
@@ -152,14 +118,172 @@ func GenerateGo(s *Schema, pkg string) string {
 	b.WriteString("}\n\n")
 	b.WriteString("// Registry maps PGN numbers to their decoders.\n")
 	b.WriteString("var Registry = map[uint32]PGNInfo{\n")
-	for _, p := range s.PGNs {
-		structName := toPascal(p.Description)
-		fmt.Fprintf(&b, "\t%d: {PGN: %d, Description: %q, Decode: func(data []byte) (any, error) { return Decode%s(data) }},\n",
-			p.PGN, p.PGN, p.Description, structName)
+	seen := map[uint32]bool{}
+	for _, pgn := range groupOrder {
+		if seen[pgn] {
+			continue
+		}
+		seen[pgn] = true
+		g := groups[pgn]
+		if len(g.indices) < 2 {
+			// Singleton: use the variant's decoder directly.
+			p := s.PGNs[g.indices[0]]
+			structName := toPascal(p.Description)
+			fmt.Fprintf(&b, "\t%d: {PGN: %d, Description: %q, Decode: func(data []byte) (any, error) { return Decode%s(data) }},\n",
+				p.PGN, p.PGN, p.Description, structName)
+		} else {
+			// Dispatch group: use the dispatch function. Pick the default variant's
+			// description, or the first variant if no default exists.
+			desc := s.PGNs[g.indices[0]].Description
+			for _, idx := range g.indices {
+				if !hasMatchValues(&s.PGNs[idx]) {
+					desc = s.PGNs[idx].Description
+					break
+				}
+			}
+			fmt.Fprintf(&b, "\t%d: {PGN: %d, Description: %q, Decode: Decode%d},\n",
+				pgn, pgn, desc, pgn)
+		}
 	}
 	b.WriteString("}\n")
 
 	return b.String()
+}
+
+// writeVariant generates struct, Decode, and Encode for a single PGN variant.
+func writeVariant(b *strings.Builder, p PGNDef) {
+	structName := toPascal(p.Description)
+	minBytes := minBufferBytes(p)
+
+	// Struct
+	fmt.Fprintf(b, "// %s represents PGN %d — %s.\n", structName, p.PGN, p.Description)
+	fmt.Fprintf(b, "type %s struct {\n", structName)
+	for _, f := range p.Fields {
+		if f.IsReserved() {
+			continue
+		}
+		goType := goFieldType(f)
+		tag := fmt.Sprintf("`json:%q`", toSnake(f.Name))
+		comment := ""
+		if f.Unit != "" {
+			comment = " // " + f.Unit
+		}
+		fmt.Fprintf(b, "\t%s %s %s%s\n", toPascal(f.Name), goType, tag, comment)
+	}
+	b.WriteString("}\n\n")
+
+	// PGN method
+	fmt.Fprintf(b, "func (%s) PGN() uint32 { return %d }\n\n", structName, p.PGN)
+
+	// Decode function
+	fmt.Fprintf(b, "// Decode%s decodes PGN %d from raw bytes.\n", structName, p.PGN)
+	fmt.Fprintf(b, "func Decode%s(data []byte) (%s, error) {\n", structName, structName)
+	fmt.Fprintf(b, "\tif len(data) < %d {\n", minBytes)
+	fmt.Fprintf(b, "\t\tpadded := make([]byte, %d)\n", minBytes)
+	fmt.Fprintf(b, "\t\tfor i := range padded { padded[i] = 0xFF }\n")
+	b.WriteString("\t\tcopy(padded, data)\n")
+	b.WriteString("\t\tdata = padded\n")
+	b.WriteString("\t}\n")
+	fmt.Fprintf(b, "\tvar m %s\n", structName)
+	for _, f := range p.Fields {
+		if f.IsReserved() {
+			continue
+		}
+		goField := toPascal(f.Name)
+		writeDecodeField(b, f, goField)
+	}
+	b.WriteString("\treturn m, nil\n")
+	b.WriteString("}\n\n")
+
+	// Encode method: constrained fields use their literal MatchValue.
+	fmt.Fprintf(b, "// Encode serializes %s to raw bytes.\n", structName)
+	fmt.Fprintf(b, "func (m *%s) Encode() []byte {\n", structName)
+	fmt.Fprintf(b, "\tdata := make([]byte, %d)\n", minBytes)
+	b.WriteString("\tfor i := range data { data[i] = 0xFF }\n")
+	for _, f := range p.Fields {
+		if f.IsReserved() {
+			continue
+		}
+		if f.MatchValue != nil {
+			writeEncodeConstrained(b, f, *f.MatchValue)
+		} else {
+			goField := toPascal(f.Name)
+			writeEncodeField(b, f, goField)
+		}
+	}
+	b.WriteString("\treturn data\n")
+	b.WriteString("}\n\n")
+}
+
+// writeEncodeConstrained emits Go code to encode a literal value into the field's bit position.
+func writeEncodeConstrained(b *strings.Builder, f FieldDef, val int64) {
+	byteOff := f.BitStart / 8
+	bitInByte := f.BitStart % 8
+	rawExpr := fmt.Sprintf("uint64(%d)", val)
+	writeBitsStmt(b, byteOff, bitInByte, f.Bits, rawExpr)
+}
+
+// writeDispatchFunc generates a Decode<PGN> dispatch function that reads the
+// discriminator field and routes to the correct variant's decoder.
+func writeDispatchFunc(b *strings.Builder, s *Schema, pgn uint32, indices []int) {
+	// Find the discriminator from any constrained variant.
+	var disc FieldDef
+	for _, idx := range indices {
+		if d := discriminatorField(&s.PGNs[idx]); d != nil {
+			disc = *d
+			break
+		}
+	}
+
+	// Figure out how to read the discriminator from raw bytes.
+	byteOff := disc.BitStart / 8
+	bitInByte := disc.BitStart % 8
+	discRead := readBitsExpr(byteOff, bitInByte, disc.Bits, false)
+	discType := uintGoType(disc.Bits)
+
+	// Minimum bytes needed to read the discriminator.
+	discMinBytes := fieldReadEnd(disc)
+
+	fmt.Fprintf(b, "// Decode%d dispatches PGN %d to the correct variant based on %s.\n",
+		pgn, pgn, disc.Name)
+	fmt.Fprintf(b, "func Decode%d(data []byte) (any, error) {\n", pgn)
+	fmt.Fprintf(b, "\tif len(data) < %d {\n", discMinBytes)
+	fmt.Fprintf(b, "\t\treturn nil, fmt.Errorf(\"PGN %d: need at least %d bytes, got %%d\", len(data))\n",
+		pgn, discMinBytes)
+	b.WriteString("\t}\n")
+	fmt.Fprintf(b, "\tdisc := %s(%s)\n", discType, discRead)
+
+	// Find default variant (if any).
+	defaultIdx := -1
+	for _, idx := range indices {
+		if !hasMatchValues(&s.PGNs[idx]) {
+			defaultIdx = idx
+			break
+		}
+	}
+
+	b.WriteString("\tswitch uint64(disc) {\n")
+	for _, idx := range indices {
+		p := &s.PGNs[idx]
+		d := discriminatorField(p)
+		if d == nil {
+			continue // default variant, handled below
+		}
+		structName := toPascal(p.Description)
+		fmt.Fprintf(b, "\tcase %d:\n", *d.MatchValue)
+		fmt.Fprintf(b, "\t\treturn Decode%s(data)\n", structName)
+	}
+	if defaultIdx >= 0 {
+		structName := toPascal(s.PGNs[defaultIdx].Description)
+		b.WriteString("\tdefault:\n")
+		fmt.Fprintf(b, "\t\treturn Decode%s(data)\n", structName)
+	} else {
+		b.WriteString("\tdefault:\n")
+		fmt.Fprintf(b, "\t\treturn nil, fmt.Errorf(\"PGN %d: unknown %s value %%d\", disc)\n",
+			pgn, disc.Name)
+	}
+	b.WriteString("\t}\n")
+	b.WriteString("}\n\n")
 }
 
 // writeDecodeField emits Go code to decode one field from data into m.<goField>.
