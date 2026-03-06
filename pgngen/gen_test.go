@@ -643,6 +643,428 @@ lookup Bad string {
 	}
 }
 
+func TestPlural(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"indicator", "indicators"},
+		{"status", "statuses"},
+		{"switch", "switches"},
+		{"bus", "buses"},
+		{"box", "boxes"},
+		{"buzz", "buzzes"},
+		{"flash", "flashes"},
+		{"category", "categories"},
+		{"key", "keys"},       // vowel+y -> just +s
+		{"day", "days"},       // vowel+y -> just +s
+		{"entry", "entries"},  // consonant+y -> ies
+		{"relay", "relays"},   // vowel+y -> just +s
+		{"value", "values"},
+	}
+	for _, tt := range tests {
+		if got := toPlural(tt.input); got != tt.want {
+			t.Errorf("toPlural(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestParseRepeat(t *testing.T) {
+	src := `
+pgn 127501 "Binary Switch Bank Status" {
+  instance    uint8   :8
+  indicator   uint8   :2  repeat=28
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := s.PGNs[0].Fields[1]
+	if f.RepeatCount != 28 {
+		t.Errorf("RepeatCount = %d, want 28", f.RepeatCount)
+	}
+	if f.GroupMode != "" {
+		t.Errorf("GroupMode = %q, want empty", f.GroupMode)
+	}
+	if f.AliasPlural != "" {
+		t.Errorf("AliasPlural = %q, want empty", f.AliasPlural)
+	}
+}
+
+func TestParseRepeatWithGroup(t *testing.T) {
+	src := `
+pgn 127501 "Test" {
+  instance    uint8   :8
+  indicator   uint8   :2  repeat=28  group="map"
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := s.PGNs[0].Fields[1]
+	if f.RepeatCount != 28 {
+		t.Errorf("RepeatCount = %d, want 28", f.RepeatCount)
+	}
+	if f.GroupMode != "map" {
+		t.Errorf("GroupMode = %q, want map", f.GroupMode)
+	}
+}
+
+func TestParseRepeatWithAs(t *testing.T) {
+	src := `
+pgn 127501 "Test" {
+  instance    uint8   :8
+  indicator   uint8   :2  repeat=28  as="switches"
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := s.PGNs[0].Fields[1]
+	if f.AliasPlural != "switches" {
+		t.Errorf("AliasPlural = %q, want switches", f.AliasPlural)
+	}
+}
+
+func TestParseRepeatErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		src     string
+		wantErr string
+	}{
+		{
+			name: "repeat on reserved field",
+			src: `
+pgn 99999 "Test" {
+  _  :2  repeat=4
+}
+`,
+			wantErr: "reserved field cannot have repeat=",
+		},
+		{
+			name: "repeat=1",
+			src: `
+pgn 99999 "Test" {
+  x  uint8  :2  repeat=1
+}
+`,
+			wantErr: "repeat= must be an integer >= 2",
+		},
+		{
+			name: "repeat=0",
+			src: `
+pgn 99999 "Test" {
+  x  uint8  :2  repeat=0
+}
+`,
+			wantErr: "repeat= must be an integer >= 2",
+		},
+		{
+			name: "repeat=foo",
+			src: `
+pgn 99999 "Test" {
+  x  uint8  :2  repeat=foo
+}
+`,
+			wantErr: "repeat= must be an integer >= 2",
+		},
+		{
+			name: "group without repeat",
+			src: `
+pgn 99999 "Test" {
+  x  uint8  :2  group="map"
+}
+`,
+			wantErr: "group= requires repeat=",
+		},
+		{
+			name: "as without repeat",
+			src: `
+pgn 99999 "Test" {
+  x  uint8  :2  as="things"
+}
+`,
+			wantErr: "as= requires repeat=",
+		},
+		{
+			name: "invalid group value",
+			src: `
+pgn 99999 "Test" {
+  x  uint8  :2  repeat=4  group="list"
+}
+`,
+			wantErr: `group= must be "map"`,
+		},
+		{
+			name: "repeat with value=",
+			src: `
+pgn 99999 "Test" {
+  x  uint8  :2  repeat=4  value=1
+}
+`,
+			wantErr: "repeat= cannot be combined with value=",
+		},
+		{
+			name: "repeat with lookup=",
+			src: `
+lookup Foo uint8 {
+  1 = "one"
+}
+
+pgn 99999 "Test" {
+  x  uint8  :2  repeat=4  lookup=Foo
+}
+`,
+			wantErr: "repeat= cannot be combined with lookup=",
+		},
+		{
+			name: "repeat with enum type",
+			src: `
+enum Status {
+  0 = "off"
+  1 = "on"
+}
+
+pgn 99999 "Test" {
+  x  Status  :2  repeat=4
+}
+`,
+			wantErr: "repeat= cannot be used with enum types",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(tt.src)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestRepeatBitOffsets(t *testing.T) {
+	src := `
+pgn 99999 "Test" {
+  instance    uint8   :8
+  indicator   uint8   :2  repeat=4
+  trailer     uint8   :8
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	// indicator starts at bit 8
+	if got := s.PGNs[0].Fields[1].BitStart; got != 8 {
+		t.Errorf("indicator BitStart = %d, want 8", got)
+	}
+	// trailer should start at bit 8 + 4*2 = 16
+	if got := s.PGNs[0].Fields[2].BitStart; got != 16 {
+		t.Errorf("trailer BitStart = %d, want 16", got)
+	}
+	// TotalBits: 8 + 4*2 + 8 = 24
+	if got := s.PGNs[0].TotalBits(); got != 24 {
+		t.Errorf("TotalBits = %d, want 24", got)
+	}
+}
+
+func TestGenerateGoRepeatArray(t *testing.T) {
+	src := `
+pgn 127501 "Binary Switch Bank Status" {
+  instance    uint8   :8
+  indicator   uint8   :2  repeat=4
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	code := GenerateGo(s, "pgn")
+
+	// Struct should have a Uint8s field (not []uint8 which json base64-encodes).
+	if !strings.Contains(code, "Indicators Uint8s") {
+		t.Error("missing Indicators Uint8s field")
+	}
+	if strings.Contains(code, "Indicator1") {
+		t.Error("should not have individual Indicator1 field")
+	}
+
+	// JSON tag should be pluralized.
+	if !strings.Contains(code, `json:"indicators"`) {
+		t.Error("missing indicators json tag")
+	}
+
+	// Decode should create a Uint8s literal.
+	if !strings.Contains(code, "m.Indicators = Uint8s{") {
+		t.Error("missing Uint8s literal in decode")
+	}
+
+	// Encode should have bounds-checked writes.
+	if !strings.Contains(code, "if len(m.Indicators) > 0") {
+		t.Error("missing bounds check for Indicators[0]")
+	}
+	if !strings.Contains(code, "if len(m.Indicators) > 3") {
+		t.Error("missing bounds check for Indicators[3]")
+	}
+}
+
+func TestGenerateGoRepeatMap(t *testing.T) {
+	src := `
+pgn 127501 "Test" {
+  instance    uint8   :8
+  indicator   uint8   :2  repeat=4  group="map"
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	code := GenerateGo(s, "pgn")
+
+	// Struct should have a map field.
+	if !strings.Contains(code, "Indicators map[int]uint8") {
+		t.Error("missing Indicators map[int]uint8 field")
+	}
+
+	// Decode should create a map literal with 1-based keys.
+	if !strings.Contains(code, "m.Indicators = map[int]uint8{") {
+		t.Error("missing map literal in decode")
+	}
+	if !strings.Contains(code, "1:") {
+		t.Error("missing key 1 in map literal")
+	}
+	if !strings.Contains(code, "4:") {
+		t.Error("missing key 4 in map literal")
+	}
+
+	// Encode should use map lookups.
+	if !strings.Contains(code, "if v, ok := m.Indicators[1]; ok") {
+		t.Error("missing map lookup for key 1 in encode")
+	}
+}
+
+func TestGenerateGoRepeatWithAs(t *testing.T) {
+	src := `
+pgn 127501 "Test" {
+  instance    uint8   :8
+  indicator   uint8   :2  repeat=4  as="switches"
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	code := GenerateGo(s, "pgn")
+
+	if !strings.Contains(code, "Switches Uint8s") {
+		t.Error("missing Switches Uint8s field (as= override)")
+	}
+	if !strings.Contains(code, `json:"switches"`) {
+		t.Error("missing switches json tag (as= override)")
+	}
+}
+
+func TestGenerateProtoRepeat(t *testing.T) {
+	src := `
+pgn 127501 "Binary Switch Bank Status" {
+  instance    uint8   :8
+  indicator   uint8   :2  repeat=4
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	proto := GenerateProto(s, "pgn.v1")
+
+	if !strings.Contains(proto, "repeated uint32 indicators") {
+		t.Error("missing repeated uint32 indicators in proto")
+	}
+}
+
+func TestGenerateJSONSchemaRepeatArray(t *testing.T) {
+	src := `
+pgn 127501 "Binary Switch Bank Status" {
+  instance    uint8   :8
+  indicator   uint8   :2  repeat=4
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	js := GenerateJSONSchema(s)
+
+	if !strings.Contains(js, `"indicators"`) {
+		t.Error("missing indicators property")
+	}
+	if !strings.Contains(js, `"array"`) {
+		t.Error("missing array type")
+	}
+	if !strings.Contains(js, `"minItems": 4`) {
+		t.Error("missing minItems: 4")
+	}
+	if !strings.Contains(js, `"maxItems": 4`) {
+		t.Error("missing maxItems: 4")
+	}
+}
+
+func TestGenerateJSONSchemaRepeatMap(t *testing.T) {
+	src := `
+pgn 127501 "Test" {
+  instance    uint8   :8
+  indicator   uint8   :2  repeat=4  group="map"
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	js := GenerateJSONSchema(s)
+
+	if !strings.Contains(js, `"indicators"`) {
+		t.Error("missing indicators property")
+	}
+	if !strings.Contains(js, `"additionalProperties"`) {
+		t.Error("missing additionalProperties for map mode")
+	}
+}
+
 func TestNaming(t *testing.T) {
 	tests := []struct {
 		input    string

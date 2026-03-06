@@ -187,6 +187,31 @@ func needsDispatch(s *Schema, indices []int) bool {
 	return false
 }
 
+// repeatSliceType returns the Go slice type for a repeated field.
+// Uses Uint8s instead of []uint8 to avoid encoding/json base64-encoding []byte.
+func repeatSliceType(elemType string) string {
+	if elemType == "uint8" {
+		return "Uint8s"
+	}
+	return "[]" + elemType
+}
+
+// repeatGoFieldName returns the Go struct field name for a repeated field.
+func repeatGoFieldName(f FieldDef) string {
+	if f.AliasPlural != "" {
+		return toPascal(f.AliasPlural)
+	}
+	return toPascal(toPlural(f.Name))
+}
+
+// repeatJSONName returns the JSON tag name for a repeated field.
+func repeatJSONName(f FieldDef) string {
+	if f.AliasPlural != "" {
+		return toSnake(f.AliasPlural)
+	}
+	return toSnake(toPlural(f.Name))
+}
+
 // writeVariant generates struct, Decode, and Encode for a single PGN variant.
 func writeVariant(b *strings.Builder, p PGNDef) {
 	structName := toPascal(p.Description)
@@ -197,6 +222,23 @@ func writeVariant(b *strings.Builder, p PGNDef) {
 	fmt.Fprintf(b, "type %s struct {\n", structName)
 	for _, f := range p.Fields {
 		if f.IsReserved() {
+			continue
+		}
+		if f.IsRepeated() {
+			goType := goFieldType(f)
+			fieldName := repeatGoFieldName(f)
+			jsonName := repeatJSONName(f)
+			tag := fmt.Sprintf("`json:%q`", jsonName)
+			comment := ""
+			if f.Unit != "" {
+				comment = " // " + f.Unit
+			}
+			if f.GroupMode == "map" {
+				fmt.Fprintf(b, "\t%s map[int]%s %s%s\n", fieldName, goType, tag, comment)
+			} else {
+				sliceType := repeatSliceType(goType)
+				fmt.Fprintf(b, "\t%s %s %s%s\n", fieldName, sliceType, tag, comment)
+			}
 			continue
 		}
 		goType := goFieldType(f)
@@ -226,6 +268,10 @@ func writeVariant(b *strings.Builder, p PGNDef) {
 		if f.IsReserved() {
 			continue
 		}
+		if f.IsRepeated() {
+			writeDecodeRepeated(b, f)
+			continue
+		}
 		goField := toPascal(f.Name)
 		writeDecodeField(b, f, goField)
 	}
@@ -239,6 +285,10 @@ func writeVariant(b *strings.Builder, p PGNDef) {
 	b.WriteString("\tfor i := range data { data[i] = 0xFF }\n")
 	for _, f := range p.Fields {
 		if f.IsReserved() {
+			continue
+		}
+		if f.IsRepeated() {
+			writeEncodeRepeated(b, f)
 			continue
 		}
 		if f.MatchValue != nil {
@@ -341,6 +391,106 @@ func writeDispatchFunc(b *strings.Builder, s *Schema, pgn uint32, indices []int)
 	}
 	b.WriteString("\t}\n")
 	b.WriteString("}\n\n")
+}
+
+// writeDecodeRepeated emits Go code to decode a repeated field into a slice or map.
+func writeDecodeRepeated(b *strings.Builder, f FieldDef) {
+	fieldName := repeatGoFieldName(f)
+	goType := goFieldType(f)
+	n := f.RepeatCount
+
+	if f.GroupMode == "map" {
+		fmt.Fprintf(b, "\tm.%s = map[int]%s{\n", fieldName, goType)
+		for i := range n {
+			bitOff := f.BitStart + i*f.Bits
+			byteOff := bitOff / 8
+			bitInByte := bitOff % 8
+			rawExpr := readBitsExpr(byteOff, bitInByte, f.Bits, f.Signed)
+			castExpr := maybeWrapCast(rawExpr, f, goType)
+			fmt.Fprintf(b, "\t\t%d: %s,\n", i+1, castExpr) // 1-based keys
+		}
+		b.WriteString("\t}\n")
+	} else {
+		fmt.Fprintf(b, "\tm.%s = %s{\n", fieldName, repeatSliceType(goType))
+		for i := range n {
+			bitOff := f.BitStart + i*f.Bits
+			byteOff := bitOff / 8
+			bitInByte := bitOff % 8
+			rawExpr := readBitsExpr(byteOff, bitInByte, f.Bits, f.Signed)
+			castExpr := maybeWrapCast(rawExpr, f, goType)
+			fmt.Fprintf(b, "\t\t%s,\n", castExpr)
+		}
+		b.WriteString("\t}\n")
+	}
+}
+
+// maybeWrapCast wraps rawExpr in a type cast if the raw type differs from goType.
+func maybeWrapCast(rawExpr string, f FieldDef, goType string) string {
+	if f.HasScaling() {
+		expr := "float64(" + rawExpr + ")"
+		if f.Scale != 0 {
+			expr += " * " + formatFloat(f.Scale)
+		}
+		if f.Offset != 0 {
+			expr += " + " + formatFloat(f.Offset)
+		}
+		return expr
+	}
+	if rawType(f) == goType {
+		return rawExpr
+	}
+	return goType + "(" + rawExpr + ")"
+}
+
+// writeEncodeRepeated emits Go code to encode a repeated field from a slice or map.
+func writeEncodeRepeated(b *strings.Builder, f FieldDef) {
+	fieldName := repeatGoFieldName(f)
+	n := f.RepeatCount
+
+	if f.GroupMode == "map" {
+		for i := range n {
+			bitOff := f.BitStart + i*f.Bits
+			byteOff := bitOff / 8
+			bitInByte := bitOff % 8
+			rawExpr := encodeRawExpr(f, "v")
+			fmt.Fprintf(b, "\tif v, ok := m.%s[%d]; ok {\n", fieldName, i+1)
+			b.WriteString("\t")
+			writeBitsStmt(b, byteOff, bitInByte, f.Bits, rawExpr)
+			b.WriteString("\t}\n")
+		}
+	} else {
+		for i := range n {
+			bitOff := f.BitStart + i*f.Bits
+			byteOff := bitOff / 8
+			bitInByte := bitOff % 8
+			rawExpr := encodeRawExpr(f, fmt.Sprintf("m.%s[%d]", fieldName, i))
+			fmt.Fprintf(b, "\tif len(m.%s) > %d {\n", fieldName, i)
+			b.WriteString("\t")
+			writeBitsStmt(b, byteOff, bitInByte, f.Bits, rawExpr)
+			b.WriteString("\t}\n")
+		}
+	}
+}
+
+// encodeRawExpr builds the uint64 expression for encoding a field value.
+func encodeRawExpr(f FieldDef, valueExpr string) string {
+	if f.HasScaling() {
+		scale := f.Scale
+		if scale == 0 {
+			scale = 1
+		}
+		if f.Signed {
+			if f.Offset != 0 {
+				return fmt.Sprintf("uint64(int64(math.Round((%s - %s) / %s)))", valueExpr, formatFloat(f.Offset), formatFloat(scale))
+			}
+			return fmt.Sprintf("uint64(int64(math.Round(%s / %s)))", valueExpr, formatFloat(scale))
+		}
+		if f.Offset != 0 {
+			return fmt.Sprintf("uint64(math.Round((%s - %s) / %s))", valueExpr, formatFloat(f.Offset), formatFloat(scale))
+		}
+		return fmt.Sprintf("uint64(math.Round(%s / %s))", valueExpr, formatFloat(scale))
+	}
+	return fmt.Sprintf("uint64(%s)", valueExpr)
 }
 
 // writeDecodeField emits Go code to decode one field from data into m.<goField>.
@@ -626,9 +776,20 @@ func intGoType(bits int) string {
 func minBufferBytes(p PGNDef) int {
 	n := 0
 	for _, f := range p.Fields {
-		end := fieldReadEnd(f)
-		if end > n {
-			n = end
+		if f.IsRepeated() {
+			// Check the last virtual field in the repeat sequence.
+			lastBitStart := f.BitStart + (f.RepeatCount-1)*f.Bits
+			vf := f
+			vf.BitStart = lastBitStart
+			end := fieldReadEnd(vf)
+			if end > n {
+				n = end
+			}
+		} else {
+			end := fieldReadEnd(f)
+			if end > n {
+				n = end
+			}
 		}
 	}
 	return n
@@ -699,6 +860,7 @@ func GenerateGoHelpers(pkg string) string {
 	var b strings.Builder
 	b.WriteString("// Code generated by pgngen; DO NOT EDIT.\n\n")
 	b.WriteString("package " + pkg + "\n\n")
+	b.WriteString("import (\n\t\"encoding/json\"\n\t\"strconv\"\n)\n\n")
 	b.WriteString(`// signExtend performs sign extension on a value with the given number of significant bits.
 func signExtend(v uint64, bits int) int64 {
 	shift := uint(64 - bits)
@@ -722,6 +884,36 @@ func encodeFixedStr(dst []byte, s string) {
 	for i := n; i < len(dst); i++ {
 		dst[i] = 0xFF
 	}
+}
+
+// Uint8s is a []uint8 that JSON-marshals as an integer array instead of base64.
+// Go's encoding/json treats []uint8 as []byte and base64-encodes it, which is
+// not what you want when the values represent decoded field data.
+type Uint8s []uint8
+
+func (u Uint8s) MarshalJSON() ([]byte, error) {
+	if u == nil {
+		return []byte("null"), nil
+	}
+	buf := make([]byte, 0, 2+len(u)*2)
+	buf = append(buf, '[')
+	for i, v := range u {
+		if i > 0 {
+			buf = append(buf, ',')
+		}
+		buf = strconv.AppendUint(buf, uint64(v), 10)
+	}
+	buf = append(buf, ']')
+	return buf, nil
+}
+
+func (u *Uint8s) UnmarshalJSON(data []byte) error {
+	var arr []uint8
+	if err := json.Unmarshal(data, &arr); err != nil {
+		return err
+	}
+	*u = arr
+	return nil
 }
 `)
 	return b.String()

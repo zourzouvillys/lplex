@@ -50,10 +50,15 @@ type PGNDef struct {
 }
 
 // TotalBits returns the total number of bits across all fields.
+// Repeated fields contribute Bits * RepeatCount.
 func (p *PGNDef) TotalBits() int {
 	total := 0
 	for _, f := range p.Fields {
-		total += f.Bits
+		if f.IsRepeated() {
+			total += f.Bits * f.RepeatCount
+		} else {
+			total += f.Bits
+		}
 	}
 	return total
 }
@@ -66,24 +71,32 @@ func (p *PGNDef) MinBytes() int {
 
 // FieldDef defines a single field within a PGN.
 type FieldDef struct {
-	Name       string    // empty for reserved fields ("_")
-	Type       FieldType // base type
-	Bits       int       // bit width
-	BitStart   int       // computed bit offset from start of packet (set by Resolve)
-	Scale      float64   // raw * scale = decoded (0 means no scaling)
-	Offset     float64   // decoded = raw * scale + offset (0 means no offset)
-	Unit       string    // human-readable unit (e.g. "deg", "m/s")
-	Desc       string    // optional description
-	EnumRef    string    // enum type name (non-empty when Type == TypeEnum)
-	LookupRef  string    // lookup table name (non-empty when lookup= is set)
-	Signed     bool      // true for int types
-	MatchValue *int64    // when set, this field must equal this value (dispatch discriminator)
-	Line       int       // source line for error reporting
+	Name        string    // empty for reserved fields ("_")
+	Type        FieldType // base type
+	Bits        int       // bit width
+	BitStart    int       // computed bit offset from start of packet (set by Resolve)
+	Scale       float64   // raw * scale = decoded (0 means no scaling)
+	Offset      float64   // decoded = raw * scale + offset (0 means no offset)
+	Unit        string    // human-readable unit (e.g. "deg", "m/s")
+	Desc        string    // optional description
+	EnumRef     string    // enum type name (non-empty when Type == TypeEnum)
+	LookupRef   string    // lookup table name (non-empty when lookup= is set)
+	Signed      bool      // true for int types
+	MatchValue  *int64    // when set, this field must equal this value (dispatch discriminator)
+	RepeatCount int       // number of repetitions (0 = not repeated, must be >= 2 when set)
+	GroupMode   string    // "" (array, default) or "map" (map[int]T)
+	AliasPlural string    // override for auto-pluralized field name (from as= attribute)
+	Line        int       // source line for error reporting
 }
 
 // IsReserved returns true if this is a padding/reserved field.
 func (f *FieldDef) IsReserved() bool {
 	return f.Name == "" || f.Name == "_"
+}
+
+// IsRepeated returns true if this field uses the repeat= attribute.
+func (f *FieldDef) IsRepeated() bool {
+	return f.RepeatCount > 0
 }
 
 // HasScaling returns true if the field has a scale or offset transformation.
@@ -131,8 +144,12 @@ func (s *Schema) Resolve() error {
 		offset := 0
 		for j := range s.PGNs[i].Fields {
 			s.PGNs[i].Fields[j].BitStart = offset
-			offset += s.PGNs[i].Fields[j].Bits
 			f := &s.PGNs[i].Fields[j]
+			if f.IsRepeated() {
+				offset += f.Bits * f.RepeatCount
+			} else {
+				offset += f.Bits
+			}
 			if f.Type == TypeEnum && !enumSet[f.EnumRef] {
 				return &ResolveError{
 					Line:    f.Line,

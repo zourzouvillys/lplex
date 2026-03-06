@@ -646,6 +646,40 @@ func Decode61184(data []byte) (any, error) {
 }
 ```
 
+### Repeated fields (`repeat=`)
+
+When a PGN has N identical consecutive fields (e.g. 28 two-bit switch indicators), use `repeat=N` to collapse them into a single line. The generator expands them at code-generation time into a slice or map in Go.
+
+```
+# Array mode (default): generates []uint8
+pgn 127501 "Binary Switch Bank Status" {
+  instance    uint8   :8
+  indicator   uint8   :2  repeat=28
+}
+
+# Map mode: generates map[int]uint8 with 1-based keys
+pgn 127501 "Binary Switch Bank Status" {
+  instance    uint8   :8
+  indicator   uint8   :2  repeat=28  group="map"
+}
+
+# Override the auto-pluralized field name
+pgn 127501 "Binary Switch Bank Status" {
+  instance    uint8   :8
+  indicator   uint8   :2  repeat=28  as="switches"
+}
+```
+
+| Attribute | Description |
+|---|---|
+| `repeat=N` | Repeat this field N times (N >= 2). Expands to N consecutive fields of the same type/width. |
+| `group="map"` | Use `map[int]T` instead of `[]T` in Go. Keys are 1-based (NMEA convention). Default is array. |
+| `as="name"` | Override the auto-pluralized field name. Default: basic English pluralization (`indicator` -> `indicators`). |
+
+**Constraints:** `repeat=` cannot be used on reserved fields or combined with `value=`, `lookup=`, or enum types. `group=` and `as=` require `repeat=`.
+
+**Generated code:** Decode produces a slice/map literal with unrolled bit reads. Encode uses bounds-checked (array) or key-checked (map) writes. Fields after a repeated field get correct bit offsets automatically.
+
 ## Deployment
 
 The `.deb` package installs a systemd service that binds to `can0`. Configure with a config file or environment variable:

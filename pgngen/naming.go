@@ -71,3 +71,33 @@ func toLowerCamel(s string) string {
 func toScreamingSnake(s string) string {
 	return strings.ToUpper(toSnake(s))
 }
+
+// toPlural applies basic English pluralization rules to a snake_case name.
+//
+//   - ends in s, x, z, sh, ch -> append "es"  (status -> statuses)
+//   - ends in consonant + y   -> replace y with "ies" (category -> categories)
+//   - everything else         -> append "s"   (indicator -> indicators)
+func toPlural(s string) string {
+	if s == "" {
+		return s
+	}
+	if strings.HasSuffix(s, "s") || strings.HasSuffix(s, "x") || strings.HasSuffix(s, "z") ||
+		strings.HasSuffix(s, "sh") || strings.HasSuffix(s, "ch") {
+		return s + "es"
+	}
+	if strings.HasSuffix(s, "y") && len(s) >= 2 {
+		prev := s[len(s)-2]
+		if !isVowel(prev) {
+			return s[:len(s)-1] + "ies"
+		}
+	}
+	return s + "s"
+}
+
+func isVowel(c byte) bool {
+	switch c {
+	case 'a', 'e', 'i', 'o', 'u':
+		return true
+	}
+	return false
+}

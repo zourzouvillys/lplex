@@ -57,8 +57,14 @@ func GenerateProto(s *Schema, pkg string) string {
 					comment += fmt.Sprintf("; see %s lookup", f.LookupRef)
 				}
 			}
-			fmt.Fprintf(&b, "  %s %s = %d;%s\n",
-				protoType, toSnake(f.Name), fieldNum, comment)
+			if f.IsRepeated() {
+				name := repeatJSONName(f)
+				fmt.Fprintf(&b, "  repeated %s %s = %d;%s\n",
+					protoType, name, fieldNum, comment)
+			} else {
+				fmt.Fprintf(&b, "  %s %s = %d;%s\n",
+					protoType, toSnake(f.Name), fieldNum, comment)
+			}
 			fieldNum++
 		}
 		b.WriteString("}\n\n")

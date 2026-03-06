@@ -40,8 +40,31 @@ func GenerateJSONSchema(s *Schema) string {
 			if f.IsReserved() {
 				continue
 			}
-			fieldName := toSnake(f.Name)
-			prop := jsonSchemaFieldType(f, s)
+
+			var fieldName string
+			var prop map[string]any
+
+			if f.IsRepeated() {
+				fieldName = repeatJSONName(f)
+				elemSchema := jsonSchemaFieldType(f, s)
+				if f.GroupMode == "map" {
+					prop = map[string]any{
+						"type":                 "object",
+						"additionalProperties": elemSchema,
+					}
+				} else {
+					prop = map[string]any{
+						"type":     "array",
+						"items":    elemSchema,
+						"minItems": f.RepeatCount,
+						"maxItems": f.RepeatCount,
+					}
+				}
+			} else {
+				fieldName = toSnake(f.Name)
+				prop = jsonSchemaFieldType(f, s)
+			}
+
 			if f.Unit != "" {
 				prop["description"] = f.Unit
 			}

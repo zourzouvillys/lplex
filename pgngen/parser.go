@@ -276,6 +276,23 @@ func (p *parser) parseField(tokens []string) (FieldDef, error) {
 				return FieldDef{}, p.errorf("reserved field cannot have lookup= attribute")
 			}
 			f.LookupRef = unquote(v)
+		case "repeat":
+			if f.IsReserved() {
+				return FieldDef{}, p.errorf("reserved field cannot have repeat= attribute")
+			}
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 2 {
+				return FieldDef{}, p.errorf("field %s: repeat= must be an integer >= 2, got %q", f.Name, v)
+			}
+			f.RepeatCount = n
+		case "group":
+			mode := unquote(v)
+			if mode != "map" {
+				return FieldDef{}, p.errorf("field %s: group= must be \"map\", got %q", f.Name, mode)
+			}
+			f.GroupMode = mode
+		case "as":
+			f.AliasPlural = unquote(v)
 		default:
 			return FieldDef{}, p.errorf("field %s: unknown attribute %q", f.Name, k)
 		}
@@ -284,6 +301,29 @@ func (p *parser) parseField(tokens []string) (FieldDef, error) {
 	// Validate string field bit width
 	if f.Type == TypeString && f.Bits%8 != 0 {
 		return FieldDef{}, p.errorf("field %s: string bit width must be multiple of 8", f.Name)
+	}
+
+	// Validate repeat= constraints
+	if f.RepeatCount > 0 {
+		if f.MatchValue != nil {
+			return FieldDef{}, p.errorf("field %s: repeat= cannot be combined with value=", f.Name)
+		}
+		if f.LookupRef != "" {
+			return FieldDef{}, p.errorf("field %s: repeat= cannot be combined with lookup=", f.Name)
+		}
+		if f.Type == TypeEnum {
+			return FieldDef{}, p.errorf("field %s: repeat= cannot be used with enum types", f.Name)
+		}
+	}
+
+	// Validate group= requires repeat=
+	if f.GroupMode != "" && f.RepeatCount == 0 {
+		return FieldDef{}, p.errorf("field %s: group= requires repeat=", f.Name)
+	}
+
+	// Validate as= requires repeat=
+	if f.AliasPlural != "" && f.RepeatCount == 0 {
+		return FieldDef{}, p.errorf("field %s: as= requires repeat=", f.Name)
 	}
 
 	return f, nil
