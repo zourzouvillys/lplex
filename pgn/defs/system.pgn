@@ -25,6 +25,17 @@ pgn 126996 "Product Information" {
   load_equiv         uint8   :8
 }
 
+# PGN 126993 — Heartbeat
+# Confirms a device is still present on the network. Default interval is 60s.
+pgn 126993 "Heartbeat" {
+  data_transmit_offset   uint16  :16  scale=0.001  unit="s"
+  sequence_counter       uint8   :8
+  controller_1_state     uint8   :2
+  controller_2_state     uint8   :2
+  equipment_status       uint8   :2
+  _                               :34
+}
+
 # PGN 126992 — System Time
 pgn 126992 "System Time" {
   sid              uint8   :8
