@@ -3,6 +3,7 @@ package lplex
 import (
 	"encoding/binary"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -310,6 +311,109 @@ func TestValueStoreSnapshotFilterByPGNAndManufacturer(t *testing.T) {
 	}
 	if len(snap[0].Values) != 1 {
 		t.Fatalf("expected 1 PGN value, got %d", len(snap[0].Values))
+	}
+	if snap[0].Values[0].PGN != 129025 {
+		t.Errorf("expected PGN 129025, got %d", snap[0].Values[0].PGN)
+	}
+}
+
+func TestValueStoreDecodedSnapshot(t *testing.T) {
+	vs := NewValueStore()
+	reg := NewDeviceRegistry()
+
+	ts := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
+
+	// PGN 129025 Position Rapid Update: lat=47.6062°, lon=-122.3321°
+	posData := make([]byte, 8)
+	binary.LittleEndian.PutUint32(posData[0:4], uint32(int32(476062000)))   // lat * 1e7
+	binary.LittleEndian.PutUint32(posData[4:8], uint32(int32(-1223321000))) // lon * 1e7
+	vs.Record(1, 129025, ts, posData, 10)
+
+	snap := vs.DecodedSnapshot(reg, nil)
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 device group, got %d", len(snap))
+	}
+	if len(snap[0].Values) != 1 {
+		t.Fatalf("expected 1 decoded value, got %d", len(snap[0].Values))
+	}
+	dv := snap[0].Values[0]
+	if dv.PGN != 129025 {
+		t.Errorf("pgn: got %d, want 129025", dv.PGN)
+	}
+	if dv.Description != "Position Rapid Update" {
+		t.Errorf("description: got %q, want %q", dv.Description, "Position Rapid Update")
+	}
+	if dv.Seq != 10 {
+		t.Errorf("seq: got %d, want 10", dv.Seq)
+	}
+	if dv.Fields == nil {
+		t.Fatal("fields should not be nil")
+	}
+
+	// Verify JSON round-trip includes decoded fields.
+	jsonBytes := vs.DecodedSnapshotJSON(reg, nil)
+	var result []json.RawMessage
+	if err := json.Unmarshal(jsonBytes, &result); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 device in JSON, got %d", len(result))
+	}
+	jsonStr := string(jsonBytes)
+	if !strings.Contains(jsonStr, "latitude") || !strings.Contains(jsonStr, "longitude") {
+		t.Errorf("JSON should contain decoded field names, got: %s", jsonStr)
+	}
+}
+
+func TestValueStoreDecodedSnapshotUnknownPGN(t *testing.T) {
+	vs := NewValueStore()
+	reg := NewDeviceRegistry()
+
+	ts := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
+	// Use a PGN unlikely to be in the registry.
+	vs.Record(1, 999999, ts, []byte{0x01, 0x02}, 1)
+
+	snap := vs.DecodedSnapshot(reg, nil)
+	if len(snap) != 0 {
+		t.Errorf("expected 0 device groups for unknown PGN, got %d", len(snap))
+	}
+}
+
+func TestValueStoreDecodedSnapshotEmpty(t *testing.T) {
+	vs := NewValueStore()
+	reg := NewDeviceRegistry()
+
+	jsonBytes := vs.DecodedSnapshotJSON(reg, nil)
+	if string(jsonBytes) != "[]" {
+		t.Errorf("empty decoded store should return [], got %s", string(jsonBytes))
+	}
+}
+
+func TestValueStoreDecodedSnapshotWithFilter(t *testing.T) {
+	vs := NewValueStore()
+	reg := NewDeviceRegistry()
+
+	ts := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
+
+	// Two valid PGNs.
+	posData := make([]byte, 8)
+	binary.LittleEndian.PutUint32(posData[0:4], uint32(int32(100000000)))
+	binary.LittleEndian.PutUint32(posData[4:8], uint32(int32(-200000000)))
+	vs.Record(1, 129025, ts, posData, 1)
+
+	windData := make([]byte, 8)
+	windData[0] = 0                                              // sid
+	binary.LittleEndian.PutUint16(windData[1:3], 550)            // speed 5.5 m/s
+	binary.LittleEndian.PutUint16(windData[3:5], 12345)          // angle
+	windData[5] = 2                                              // apparent
+	vs.Record(1, 130306, ts, windData, 2)
+
+	snap := vs.DecodedSnapshot(reg, &EventFilter{PGNs: []uint32{129025}})
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 device group, got %d", len(snap))
+	}
+	if len(snap[0].Values) != 1 {
+		t.Fatalf("expected 1 value, got %d", len(snap[0].Values))
 	}
 	if snap[0].Values[0].PGN != 129025 {
 		t.Errorf("expected PGN 129025, got %d", snap[0].Values[0].PGN)

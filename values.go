@@ -7,6 +7,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/sixfathoms/lplex/pgn"
 )
 
 // valueFilter holds precomputed filter sets for fast lookup during snapshot iteration.
@@ -188,6 +190,115 @@ func (vs *ValueStore) Snapshot(devices *DeviceRegistry, filter *EventFilter) []D
 // SnapshotJSON returns the snapshot as pre-serialized JSON.
 func (vs *ValueStore) SnapshotJSON(devices *DeviceRegistry, filter *EventFilter) json.RawMessage {
 	snap := vs.Snapshot(devices, filter)
+	b, _ := json.Marshal(snap)
+	return b
+}
+
+// DecodedPGNValue is a single PGN's last-known value decoded into named fields.
+type DecodedPGNValue struct {
+	PGN         uint32 `json:"pgn"`
+	Description string `json:"description"`
+	Ts          string `json:"ts"`
+	Seq         uint64 `json:"seq"`
+	Fields      any    `json:"fields"`
+}
+
+// DecodedDeviceValues groups decoded PGN values by device.
+type DecodedDeviceValues struct {
+	Name         string            `json:"name"`
+	Source       uint8             `json:"src"`
+	Manufacturer string            `json:"manufacturer,omitempty"`
+	ModelID      string            `json:"model_id,omitempty"`
+	Values       []DecodedPGNValue `json:"values"`
+}
+
+// DecodedSnapshot returns the current values grouped by device with PGN data
+// decoded into named fields using the pgn.Registry. PGNs not in the registry
+// or that fail to decode are omitted.
+func (vs *ValueStore) DecodedSnapshot(devices *DeviceRegistry, filter *EventFilter) []DecodedDeviceValues {
+	vf := newValueFilter(filter, devices)
+
+	vs.mu.RLock()
+	type entry struct {
+		key valueKey
+		val valueEntry
+	}
+	entries := make([]entry, 0, len(vs.values))
+	for k, v := range vs.values {
+		if vf != nil && vf.pgns != nil {
+			if _, ok := vf.pgns[k.PGN]; !ok {
+				continue
+			}
+		}
+		entries = append(entries, entry{key: k, val: *v})
+	}
+	vs.mu.RUnlock()
+
+	// Group by source address, decoding each value.
+	bySource := make(map[uint8][]DecodedPGNValue)
+	sources := make(map[uint8]struct{})
+	for _, e := range entries {
+		info, ok := pgn.Registry[e.key.PGN]
+		if !ok {
+			continue
+		}
+		decoded, err := info.Decode(e.val.Data)
+		if err != nil {
+			continue
+		}
+		sources[e.key.Source] = struct{}{}
+		bySource[e.key.Source] = append(bySource[e.key.Source], DecodedPGNValue{
+			PGN:         e.key.PGN,
+			Description: info.Description,
+			Ts:          e.val.Timestamp.UTC().Format(time.RFC3339Nano),
+			Seq:         e.val.Seq,
+			Fields:      decoded,
+		})
+	}
+
+	sortedSources := make([]uint8, 0, len(sources))
+	for src := range sources {
+		sortedSources = append(sortedSources, src)
+	}
+	slices.Sort(sortedSources)
+
+	result := make([]DecodedDeviceValues, 0, len(sortedSources))
+	for _, src := range sortedSources {
+		if vf != nil && vf.hasDev && !vf.devFunc(src) {
+			continue
+		}
+
+		vals := bySource[src]
+		slices.SortFunc(vals, func(a, b DecodedPGNValue) int {
+			if a.PGN < b.PGN {
+				return -1
+			}
+			if a.PGN > b.PGN {
+				return 1
+			}
+			return 0
+		})
+
+		dv := DecodedDeviceValues{
+			Source: src,
+			Values: vals,
+		}
+
+		if dev := devices.Get(src); dev != nil && dev.NAME != 0 {
+			dv.Name = fmt.Sprintf("0x%016x", dev.NAME)
+			dv.Manufacturer = dev.Manufacturer
+			dv.ModelID = dev.ModelID
+		}
+
+		result = append(result, dv)
+	}
+
+	return result
+}
+
+// DecodedSnapshotJSON returns the decoded snapshot as pre-serialized JSON.
+func (vs *ValueStore) DecodedSnapshotJSON(devices *DeviceRegistry, filter *EventFilter) json.RawMessage {
+	snap := vs.DecodedSnapshot(devices, filter)
 	b, _ := json.Marshal(snap)
 	return b
 }

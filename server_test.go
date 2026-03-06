@@ -586,6 +586,109 @@ func TestEphemeralSSEWithFilter(t *testing.T) {
 	}
 }
 
+func TestDecodedValues(t *testing.T) {
+	srv, b := newTestServer()
+	defer close(b.rxFrames)
+
+	// Inject a valid Position Rapid Update frame (PGN 129025).
+	posData := make([]byte, 8)
+	binary.LittleEndian.PutUint32(posData[0:4], uint32(int32(476062000)))
+	binary.LittleEndian.PutUint32(posData[4:8], uint32(int32(-1223321000)))
+	injectFrame(b, 129025, 1, posData)
+	time.Sleep(50 * time.Millisecond)
+
+	req := httptest.NewRequest("GET", "/values/decoded", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+
+	var result []DecodedDeviceValues
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 device, got %d", len(result))
+	}
+	if len(result[0].Values) != 1 {
+		t.Fatalf("expected 1 decoded value, got %d", len(result[0].Values))
+	}
+	if result[0].Values[0].PGN != 129025 {
+		t.Errorf("pgn: got %d, want 129025", result[0].Values[0].PGN)
+	}
+	if result[0].Values[0].Description != "Position Rapid Update" {
+		t.Errorf("description: got %q", result[0].Values[0].Description)
+	}
+	if result[0].Values[0].Fields == nil {
+		t.Error("fields should not be nil")
+	}
+
+	// Verify the response contains decoded field names.
+	body := w.Body.String()
+	if !strings.Contains(body, "latitude") || !strings.Contains(body, "longitude") {
+		t.Errorf("response should contain decoded fields, got: %s", body)
+	}
+}
+
+func TestDecodedValuesEmpty(t *testing.T) {
+	srv, b := newTestServer()
+	defer close(b.rxFrames)
+
+	req := httptest.NewRequest("GET", "/values/decoded", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	if w.Body.String() != "[]" {
+		t.Errorf("expected [], got %s", w.Body.String())
+	}
+}
+
+func TestDecodedValuesWithFilter(t *testing.T) {
+	srv, b := newTestServer()
+	defer close(b.rxFrames)
+
+	// Inject position and wind frames.
+	posData := make([]byte, 8)
+	binary.LittleEndian.PutUint32(posData[0:4], uint32(int32(100000000)))
+	binary.LittleEndian.PutUint32(posData[4:8], uint32(int32(-200000000)))
+	injectFrame(b, 129025, 1, posData)
+
+	windData := make([]byte, 8)
+	windData[0] = 0
+	binary.LittleEndian.PutUint16(windData[1:3], 550)
+	binary.LittleEndian.PutUint16(windData[3:5], 12345)
+	windData[5] = 2
+	injectFrame(b, 130306, 1, windData)
+	time.Sleep(50 * time.Millisecond)
+
+	req := httptest.NewRequest("GET", "/values/decoded?pgn=129025", nil)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+
+	var result []DecodedDeviceValues
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 device, got %d", len(result))
+	}
+	if len(result[0].Values) != 1 {
+		t.Fatalf("expected 1 value (filtered), got %d", len(result[0].Values))
+	}
+	if result[0].Values[0].PGN != 129025 {
+		t.Errorf("expected PGN 129025, got %d", result[0].Values[0].PGN)
+	}
+}
+
 func TestCreateSessionDefaultDurationIsZero(t *testing.T) {
 	srv, b := newTestServer()
 	defer close(b.rxFrames)

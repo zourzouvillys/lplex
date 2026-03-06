@@ -437,6 +437,26 @@ func registerCloudHTTP(mux *http.ServeMux, im *lplex.InstanceManager, replServer
 			logger.Error("failed to write values", "error", err)
 		}
 	})
+
+	mux.HandleFunc("GET /instances/{id}/values/decoded", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		broker := replServer.GetInstanceBroker(id)
+		if broker == nil {
+			http.Error(w, "instance not found or broker not running", http.StatusNotFound)
+			return
+		}
+
+		filter, err := lplex.ParseFilterParams(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write(broker.Values().DecodedSnapshotJSON(broker.Devices(), filter)); err != nil {
+			logger.Error("failed to write decoded values", "error", err)
+		}
+	})
 }
 
 // buildKeeperConfig parses retention/archive flags and returns a KeeperConfig
