@@ -32,6 +32,7 @@ func NewServer(broker *Broker, logger *slog.Logger) *Server {
 	s.mux.HandleFunc("POST /send", s.handleSend)
 	s.mux.HandleFunc("GET /devices", s.handleDevices)
 	s.mux.HandleFunc("GET /values", s.handleValues)
+	s.mux.HandleFunc("GET /values/decoded", s.handleDecodedValues)
 	return s
 }
 
@@ -340,6 +341,20 @@ func (s *Server) handleValues(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write(s.broker.values.SnapshotJSON(s.broker.devices, filter)); err != nil {
 		s.logger.Error("failed to write values response", "error", err)
+	}
+}
+
+// GET /values/decoded
+func (s *Server) handleDecodedValues(w http.ResponseWriter, r *http.Request) {
+	filter, err := ParseFilterParams(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write(s.broker.values.DecodedSnapshotJSON(s.broker.devices, filter)); err != nil {
+		s.logger.Error("failed to write decoded values response", "error", err)
 	}
 }
 
