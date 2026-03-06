@@ -795,6 +795,7 @@ const (
 	ansiHiBlue  = "\033[94m"
 	ansiHiMag   = "\033[95m"
 	ansiHiCyan  = "\033[96m"
+	ansiRed     = "\033[31m"
 )
 
 var srcPalette = []string{
@@ -840,16 +841,26 @@ func formatFrame(w *bufio.Writer, f *lplexc.Frame, dm *deviceMap, decode bool) {
 		return
 	}
 	decoded, err := decodeFrame(f)
-	if err != nil || decoded == nil {
+	if err != nil {
+		fmt.Fprintf(w, " %sp%d%s  %s  %s%s%s\n",
+			ansiDim, f.Prio, ansiReset,
+			f.Data,
+			ansiRed, err.Error(), ansiReset,
+		)
+		return
+	}
+	if decoded == nil {
 		fmt.Fprintf(w, " %sp%d%s  %s\n",
 			ansiDim, f.Prio, ansiReset,
 			f.Data,
 		)
 		return
 	}
-	fmt.Fprintf(w, " %sp%d%s\n", ansiDim, f.Prio, ansiReset)
 	b, _ := json.Marshal(decoded)
-	fmt.Fprintf(w, "  %s%s%s\n", ansiDim, string(b), ansiReset)
+	fmt.Fprintf(w, " %sp%d%s  %s%s%s\n",
+		ansiDim, f.Prio, ansiReset,
+		ansiDim, string(b), ansiReset,
+	)
 }
 
 // decodeFrame attempts to decode a frame's hex data using the pgn.Registry.
@@ -873,20 +884,23 @@ func writeJSONFrame(w *bufio.Writer, f *lplexc.Frame, decode bool) {
 		return
 	}
 	type jsonFrame struct {
-		Seq     uint64 `json:"seq"`
-		Ts      string `json:"ts"`
-		Prio    uint8  `json:"prio"`
-		PGN     uint32 `json:"pgn"`
-		Src     uint8  `json:"src"`
-		Dst     uint8  `json:"dst"`
-		Data    string `json:"data"`
-		Decoded any    `json:"decoded,omitempty"`
+		Seq         uint64 `json:"seq"`
+		Ts          string `json:"ts"`
+		Prio        uint8  `json:"prio"`
+		PGN         uint32 `json:"pgn"`
+		Src         uint8  `json:"src"`
+		Dst         uint8  `json:"dst"`
+		Data        string `json:"data"`
+		Decoded     any    `json:"decoded,omitempty"`
+		DecodeError string `json:"decode_error,omitempty"`
 	}
 	jf := jsonFrame{
 		Seq: f.Seq, Ts: f.Ts, Prio: f.Prio,
 		PGN: f.PGN, Src: f.Src, Dst: f.Dst, Data: f.Data,
 	}
-	if v, err := decodeFrame(f); err == nil && v != nil {
+	if v, err := decodeFrame(f); err != nil {
+		jf.DecodeError = err.Error()
+	} else if v != nil {
 		jf.Decoded = v
 	}
 	b, _ := json.Marshal(jf)
