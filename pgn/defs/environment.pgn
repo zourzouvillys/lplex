@@ -51,7 +51,7 @@ pgn 130310 "Environmental Parameters Outside" {
   water_temperature      uint16  :16  scale=0.01    unit="K"
   outside_temperature    uint16  :16  scale=0.01    unit="K"
   atmospheric_pressure   uint16  :16  scale=100     unit="Pa"
-  _                               :16
+  _                               :8
 }
 
 # PGN 130311 — Environmental Parameters (Inside)
@@ -62,7 +62,6 @@ pgn 130311 "Environmental Parameters Inside" {
   temperature            uint16            :16  scale=0.01   unit="K"
   humidity               int16             :16  scale=0.004  unit="%"
   atmospheric_pressure   uint16            :16  scale=100    unit="Pa"
-  _                                         :8
 }
 
 # PGN 130312 — Temperature
