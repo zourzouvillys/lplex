@@ -81,6 +81,7 @@ var fastPacketPGNs = map[uint32]bool{
 	// Engine & Electrical
 	127489: true, // Engine Parameters, Dynamic
 	127506: true, // DC Detailed Status
+	127509: true, // Inverter Status
 	127513: true, // Battery Configuration Status
 
 	// Distance
