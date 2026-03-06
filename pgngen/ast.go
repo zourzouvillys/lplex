@@ -49,17 +49,18 @@ func (p *PGNDef) MinBytes() int {
 
 // FieldDef defines a single field within a PGN.
 type FieldDef struct {
-	Name     string    // empty for reserved fields ("_")
-	Type     FieldType // base type
-	Bits     int       // bit width
-	BitStart int       // computed bit offset from start of packet (set by Resolve)
-	Scale    float64   // raw * scale = decoded (0 means no scaling)
-	Offset   float64   // decoded = raw * scale + offset (0 means no offset)
-	Unit     string    // human-readable unit (e.g. "deg", "m/s")
-	Desc     string    // optional description
-	EnumRef  string    // enum type name (non-empty when Type == TypeEnum)
-	Signed   bool      // true for int types
-	Line     int       // source line for error reporting
+	Name       string    // empty for reserved fields ("_")
+	Type       FieldType // base type
+	Bits       int       // bit width
+	BitStart   int       // computed bit offset from start of packet (set by Resolve)
+	Scale      float64   // raw * scale = decoded (0 means no scaling)
+	Offset     float64   // decoded = raw * scale + offset (0 means no offset)
+	Unit       string    // human-readable unit (e.g. "deg", "m/s")
+	Desc       string    // optional description
+	EnumRef    string    // enum type name (non-empty when Type == TypeEnum)
+	Signed     bool      // true for int types
+	MatchValue *int64    // when set, this field must equal this value (dispatch discriminator)
+	Line       int       // source line for error reporting
 }
 
 // IsReserved returns true if this is a padding/reserved field.
@@ -85,7 +86,7 @@ const (
 )
 
 // Resolve computes BitStart offsets for all fields in all PGNs and validates
-// enum references. Call after parsing, before code generation.
+// enum references and dispatch groups. Call after parsing, before code generation.
 func (s *Schema) Resolve() error {
 	enumSet := make(map[string]bool, len(s.Enums))
 	for _, e := range s.Enums {
@@ -105,6 +106,93 @@ func (s *Schema) Resolve() error {
 			}
 		}
 	}
+
+	// Validate dispatch groups: PGNs sharing the same number.
+	groups := make(map[uint32][]int) // PGN number -> indices into s.PGNs
+	for i, p := range s.PGNs {
+		groups[p.PGN] = append(groups[p.PGN], i)
+	}
+	for pgn, indices := range groups {
+		if len(indices) < 2 {
+			continue
+		}
+		if err := validateDispatchGroup(s, pgn, indices); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// discriminatorField returns the first field with a MatchValue constraint, or nil.
+func discriminatorField(p *PGNDef) *FieldDef {
+	for i := range p.Fields {
+		if p.Fields[i].MatchValue != nil {
+			return &p.Fields[i]
+		}
+	}
+	return nil
+}
+
+// hasMatchValues returns true if any field in the PGN has a MatchValue constraint.
+func hasMatchValues(p *PGNDef) bool {
+	return discriminatorField(p) != nil
+}
+
+func validateDispatchGroup(s *Schema, pgn uint32, indices []int) error {
+	// Find the discriminator from the first constrained variant.
+	var discName string
+	var discBitStart, discBits int
+	found := false
+	for _, idx := range indices {
+		if d := discriminatorField(&s.PGNs[idx]); d != nil {
+			discName = d.Name
+			discBitStart = d.BitStart
+			discBits = d.Bits
+			found = true
+			break
+		}
+	}
+	pgnStr := itoa(int64(pgn))
+	if !found {
+		return &ResolveError{
+			Message: "PGN " + pgnStr + ": multiple definitions require at least one variant with a value= constraint",
+		}
+	}
+
+	// Validate all constrained variants use the same discriminator field.
+	defaultCount := 0
+	matchValues := make(map[int64]int) // match value -> PGN index (for duplicate detection)
+	for _, idx := range indices {
+		p := &s.PGNs[idx]
+		d := discriminatorField(p)
+		if d == nil {
+			defaultCount++
+			if defaultCount > 1 {
+				return &ResolveError{
+					Line:    p.Line,
+					Message: "PGN " + pgnStr + ": multiple default variants (without value= constraints)",
+				}
+			}
+			continue
+		}
+		if d.Name != discName || d.BitStart != discBitStart || d.Bits != discBits {
+			return &ResolveError{
+				Line: d.Line,
+				Message: "PGN " + pgnStr + ": discriminator field mismatch: " +
+					d.Name + " at bit " + itoa(int64(d.BitStart)) + ":" + itoa(int64(d.Bits)) +
+					" vs " + discName + " at bit " + itoa(int64(discBitStart)) + ":" + itoa(int64(discBits)),
+			}
+		}
+		if prev, dup := matchValues[*d.MatchValue]; dup {
+			return &ResolveError{
+				Line: d.Line,
+				Message: "PGN " + pgnStr + ": duplicate match value " + itoa(*d.MatchValue) +
+					" (also at line " + itoa(int64(s.PGNs[prev].Line)) + ")",
+			}
+		}
+		matchValues[*d.MatchValue] = idx
+	}
+
 	return nil
 }
 
@@ -116,14 +204,19 @@ type ResolveError struct {
 
 func (e *ResolveError) Error() string {
 	if e.Line > 0 {
-		return "line " + itoa(e.Line) + ": " + e.Message
+		return "line " + itoa(int64(e.Line)) + ": " + e.Message
 	}
 	return e.Message
 }
 
-func itoa(n int) string {
+func itoa(n int64) string {
 	if n == 0 {
 		return "0"
+	}
+	neg := false
+	if n < 0 {
+		neg = true
+		n = -n
 	}
 	buf := [20]byte{}
 	i := len(buf)
@@ -131,6 +224,10 @@ func itoa(n int) string {
 		i--
 		buf[i] = byte('0' + n%10)
 		n /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
 	}
 	return string(buf[i:])
 }

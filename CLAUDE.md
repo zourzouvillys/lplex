@@ -146,8 +146,8 @@ lplex-cloud process
 | `lplexc/` | Public Go client library: Subscribe, Devices, Send, Session, mDNS discovery |
 | `canbus/` | Public CAN ID parsing (`CANHeader`, `ParseCANID`, `BuildCANID`) and ISO NAME decoding |
 | `journal/` | Public journal format: `Device`, `Reader`, `CompressionType`, block constants, length-prefixed string helpers |
-| `pgn/` | Generated Go types for NMEA 2000 PGNs: structs, `Decode*`/`Encode` methods, `Registry` map. Generated from `pgn/defs/*.pgn` via `go generate`. |
-| `pgngen/` | PGN DSL parser and code generators (Go, Protobuf, JSON Schema). AST, bit-level field layout, scaling, enums. |
+| `pgn/` | Generated Go types for NMEA 2000 PGNs: structs, `Decode*`/`Encode` methods, `Registry` map. Generated from `pgn/defs/*.pgn` via `go generate`. Hand-written helpers live alongside generated code (e.g. `victron.go` for register name lookup). |
+| `pgngen/` | PGN DSL parser and code generators (Go, Protobuf, JSON Schema). AST, bit-level field layout, scaling, enums, value-based dispatch for proprietary PGNs. |
 | `proto/replication/v1/` | Protobuf + gRPC definitions for replication protocol |
 
 ### Root Package File Map

@@ -4,7 +4,7 @@ CAN bus HTTP bridge for NMEA 2000. Reads raw CAN frames from a SocketCAN interfa
 
 - **Real-time SSE streaming** with [ephemeral and buffered session modes](#api), per-client filtering by PGN, manufacturer, instance, or device name
 - **Fast-packet reassembly** for multi-frame NMEA 2000 PGNs, with automatic device discovery via ISO requests
-- **[PGN decoding](#pgn-decoding)** of known NMEA 2000 message types into human-readable field values, with a DSL-based code generator (`pgngen`)
+- **[PGN decoding](#pgn-decoding)** of known NMEA 2000 message types into human-readable field values, with a [DSL-based code generator](#pgn-dsl) supporting variant dispatch for proprietary PGNs
 - **[Journal recording](#journal-recording)** to block-based `.lpj` files with zstd compression, CRC32C checksums, and O(log N) time seeking
 - **[Retention and archival](#retention-and-archival)** with max-age/min-keep/max-size knobs, soft/hard thresholds, configurable overflow policy, and pluggable archive scripts
 - **[Cloud replication](#cloud-replication)** over gRPC with mTLS, live + backfill streams, hole tracking, and lazy per-instance Broker on the cloud side
@@ -513,21 +513,111 @@ lplexdump -file recording.lpj -decode
 
 Decoding covers ~30 common PGNs (position, heading, wind, depth, engine, battery, environment, etc.). Unknown PGNs pass through with raw hex data as usual.
 
-### PGN Code Generator (`pgngen`)
+## PGN DSL
 
-PGN definitions live in `pgn/defs/*.pgn` using a compact DSL:
+PGN definitions live in `pgn/defs/*.pgn` using a compact DSL that describes bit-level field layouts. The code generator (`pgngen`) reads these files and produces Go structs with `Decode*`/`Encode` methods, a `Registry` map, Protobuf definitions, and JSON Schema.
+
+```bash
+go generate ./pgn/...   # regenerate from pgn/defs/*.pgn
+```
+
+### Basic syntax
 
 ```
+# Line comments start with #
+
 pgn 129025 "Position Rapid Update" {
-    latitude  int32 scale=1e-7 unit="deg"
-    longitude int32 scale=1e-7 unit="deg"
+  latitude   int32  :32  scale=1e-7  unit="deg"
+  longitude  int32  :32  scale=1e-7  unit="deg"
 }
 ```
 
-The generator produces Go structs with `Decode*`/`Encode` methods, a `Registry` map, Protobuf definitions, and JSON Schema:
+Each field has: `name  type  :bits  [attributes...]`
 
-```bash
-go generate ./pgn/...
+| Element | Description |
+|---|---|
+| `name` | Field name (snake_case). Use `_` for reserved/padding bits. |
+| `type` | `uint8`, `uint16`, `uint32`, `uint64`, `int8`, `int16`, `int32`, `int64`, `float32`, `float64`, `string`, or an enum name |
+| `:bits` | Bit width of the field |
+| `scale=N` | Scaling factor: `decoded = raw * scale`. Output type becomes `float64`. |
+| `offset=N` | Offset: `decoded = raw * scale + offset` |
+| `unit="..."` | Human-readable unit (e.g. `"deg"`, `"m/s"`, `"rad"`) |
+| `value=N` | Dispatch constraint for variant PGNs (see below) |
+
+### Enums
+
+Named enumerations for lookup fields:
+
+```
+enum HeadingReference {
+  0 = "true"
+  1 = "magnetic"
+}
+
+pgn 127250 "Vessel Heading" {
+  sid                uint8             :8
+  heading            uint16            :16  scale=0.0001  unit="rad"
+  heading_reference  HeadingReference  :2
+  _                                    :6
+}
+```
+
+### Variant dispatch (`value=`)
+
+Some PGN numbers (notably 61184, Proprietary Single Frame) carry different payloads depending on a discriminator field value. The DSL supports this by allowing multiple `pgn` blocks with the same number, differentiated by `value=` constraints on a shared discriminator field.
+
+```
+# Victron devices use manufacturer_code=358
+pgn 61184 "Victron Battery Register" {
+  manufacturer_code  uint16  :11  value=358
+  _                          :2
+  industry_code      uint8   :3
+  register_id        uint16  :16
+  payload            uint32  :32
+}
+
+# Garmin devices use manufacturer_code=229
+pgn 61184 "Garmin Proprietary" {
+  manufacturer_code  uint16  :11  value=229
+  _                          :2
+  industry_code      uint8   :3
+  data               uint32  :32
+}
+```
+
+The generator produces:
+- A separate struct and `Decode*`/`Encode` for each variant (`VictronBatteryRegister`, `GarminProprietary`)
+- A dispatch function `Decode61184(data []byte) (any, error)` that reads the discriminator from raw bytes and routes to the correct variant decoder
+- A single `Registry` entry for the PGN number pointing to the dispatch function
+
+**Rules and constraints:**
+
+| Rule | Detail |
+|---|---|
+| Discriminator field | All constrained variants must use the same field name, bit position, and bit width as the discriminator |
+| Unique values | Each `value=N` must be unique across all variants of the same PGN |
+| Default variant | A variant with no `value=` on any field acts as the fallback for unrecognized discriminator values. This is optional, not required. |
+| At most one default | Only one default variant (without `value=`) is allowed per PGN |
+| Minimum one constraint | At least one variant must have a `value=` constraint. Two defaults with no constraints is an error. |
+| Single constrained variant | Even a single `pgn` block with `value=` gets a dispatch function that rejects non-matching discriminator values |
+| No default means error | Without a default variant, unknown discriminator values return an error from the dispatch function |
+| Constrained encode | `Encode()` hardcodes the `value=N` literal instead of reading the struct field, so encoded frames always have the correct discriminator |
+| Reserved fields | `_` (padding) fields cannot have `value=` |
+
+**Generated dispatch (conceptual):**
+
+```go
+func Decode61184(data []byte) (any, error) {
+    disc := binary.LittleEndian.Uint16(data[0:2]) & 0x07FF
+    switch uint64(disc) {
+    case 358:
+        return DecodeVictronBatteryRegister(data)
+    case 229:
+        return DecodeGarminProprietary(data)
+    default:
+        return nil, fmt.Errorf("PGN 61184: unknown manufacturer_code value %d", disc)
+    }
+}
 ```
 
 ## Deployment
