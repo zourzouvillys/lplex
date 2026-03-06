@@ -27,6 +27,39 @@ pgn 127489 "Engine Parameters Dynamic" {
   percent_engine_torque    int8    :8   unit="%"
 }
 
+# PGN 127501 — Binary Switch Bank Status
+pgn 127501 "Binary Switch Bank Status" {
+  instance      uint8   :8
+  indicator_1   uint8   :2
+  indicator_2   uint8   :2
+  indicator_3   uint8   :2
+  indicator_4   uint8   :2
+  indicator_5   uint8   :2
+  indicator_6   uint8   :2
+  indicator_7   uint8   :2
+  indicator_8   uint8   :2
+  indicator_9   uint8   :2
+  indicator_10  uint8   :2
+  indicator_11  uint8   :2
+  indicator_12  uint8   :2
+  indicator_13  uint8   :2
+  indicator_14  uint8   :2
+  indicator_15  uint8   :2
+  indicator_16  uint8   :2
+  indicator_17  uint8   :2
+  indicator_18  uint8   :2
+  indicator_19  uint8   :2
+  indicator_20  uint8   :2
+  indicator_21  uint8   :2
+  indicator_22  uint8   :2
+  indicator_23  uint8   :2
+  indicator_24  uint8   :2
+  indicator_25  uint8   :2
+  indicator_26  uint8   :2
+  indicator_27  uint8   :2
+  indicator_28  uint8   :2
+}
+
 # PGN 127505 — Fluid Level
 pgn 127505 "Fluid Level" {
   instance    uint8   :4

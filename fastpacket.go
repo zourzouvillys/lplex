@@ -78,6 +78,9 @@ var fastPacketPGNs = map[uint32]bool{
 	130073: true, // Route and WP Service - WP List - WP Name & Position
 	130074: true, // Route and WP Service - WP List - Database List
 
+	// Distance
+	128275: true, // Distance Log
+
 	// Environment
 	130323: true, // Meteorological Station Data
 	130567: true, // Watermaker Input Setting and Status

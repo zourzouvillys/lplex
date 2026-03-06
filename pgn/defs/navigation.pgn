@@ -54,6 +54,16 @@ pgn 127257 "Attitude" {
   _               :8
 }
 
+# PGN 127258 — Magnetic Variation
+pgn 127258 "Magnetic Variation" {
+  sid              uint8               :8
+  source           HeadingReference    :4
+  _                                    :4
+  days_since_1970  uint16              :16
+  variation        int16               :16  scale=0.0001 unit="rad"
+  _                                    :16
+}
+
 # PGN 128259 — Speed, Water Referenced
 pgn 128259 "Speed Water Referenced" {
   sid           uint8      :8
@@ -70,6 +80,14 @@ pgn 128267 "Water Depth" {
   depth        uint32  :32  scale=0.01    unit="m"
   offset       int16   :16  scale=0.001   unit="m"
   max_range    uint32  :32  scale=0.01    unit="m"
+}
+
+# PGN 128275 — Distance Log
+pgn 128275 "Distance Log" {
+  days_since_1970  uint16  :16
+  seconds_today    uint32  :32  scale=0.0001 unit="s"
+  log              uint32  :32  scale=1      unit="m"
+  trip_log         uint32  :32  scale=1      unit="m"
 }
 
 # PGN 129025 — Position, Rapid Update
@@ -134,4 +152,15 @@ pgn 129284 "Navigation Data" {
   dest_latitude              int32   :32  scale=1e-7    unit="deg"
   dest_longitude             int32   :32  scale=1e-7    unit="deg"
   wp_closing_velocity        int16   :16  scale=0.01    unit="m/s"
+}
+
+# PGN 129539 — GNSS DOPs
+pgn 129539 "GNSS DOPs" {
+  sid            uint8   :8
+  desired_mode   uint8   :3
+  actual_mode    uint8   :3
+  _                       :2
+  hdop           int16   :16  scale=0.01
+  vdop           int16   :16  scale=0.01
+  tdop           int16   :16  scale=0.01
 }
