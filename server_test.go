@@ -592,8 +592,10 @@ func TestDecodedValues(t *testing.T) {
 
 	// Inject a valid Position Rapid Update frame (PGN 129025).
 	posData := make([]byte, 8)
-	binary.LittleEndian.PutUint32(posData[0:4], uint32(int32(476062000)))
-	binary.LittleEndian.PutUint32(posData[4:8], uint32(int32(-1223321000)))
+	latRaw := int32(476062000)
+	lonRaw := int32(-1223321000)
+	binary.LittleEndian.PutUint32(posData[0:4], uint32(latRaw))
+	binary.LittleEndian.PutUint32(posData[4:8], uint32(lonRaw))
 	injectFrame(b, 129025, 1, posData)
 	time.Sleep(50 * time.Millisecond)
 
@@ -654,8 +656,10 @@ func TestDecodedValuesWithFilter(t *testing.T) {
 
 	// Inject position and wind frames.
 	posData := make([]byte, 8)
-	binary.LittleEndian.PutUint32(posData[0:4], uint32(int32(100000000)))
-	binary.LittleEndian.PutUint32(posData[4:8], uint32(int32(-200000000)))
+	latRaw := int32(100000000)
+	lonRaw := int32(-200000000)
+	binary.LittleEndian.PutUint32(posData[0:4], uint32(latRaw))
+	binary.LittleEndian.PutUint32(posData[4:8], uint32(lonRaw))
 	injectFrame(b, 129025, 1, posData)
 
 	windData := make([]byte, 8)

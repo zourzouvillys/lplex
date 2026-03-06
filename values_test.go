@@ -325,8 +325,10 @@ func TestValueStoreDecodedSnapshot(t *testing.T) {
 
 	// PGN 129025 Position Rapid Update: lat=47.6062°, lon=-122.3321°
 	posData := make([]byte, 8)
-	binary.LittleEndian.PutUint32(posData[0:4], uint32(int32(476062000)))   // lat * 1e7
-	binary.LittleEndian.PutUint32(posData[4:8], uint32(int32(-1223321000))) // lon * 1e7
+	latRaw := int32(476062000)
+	lonRaw := int32(-1223321000)
+	binary.LittleEndian.PutUint32(posData[0:4], uint32(latRaw))
+	binary.LittleEndian.PutUint32(posData[4:8], uint32(lonRaw))
 	vs.Record(1, 129025, ts, posData, 10)
 
 	snap := vs.DecodedSnapshot(reg, nil)
@@ -397,8 +399,10 @@ func TestValueStoreDecodedSnapshotWithFilter(t *testing.T) {
 
 	// Two valid PGNs.
 	posData := make([]byte, 8)
-	binary.LittleEndian.PutUint32(posData[0:4], uint32(int32(100000000)))
-	binary.LittleEndian.PutUint32(posData[4:8], uint32(int32(-200000000)))
+	latRaw2 := int32(100000000)
+	lonRaw2 := int32(-200000000)
+	binary.LittleEndian.PutUint32(posData[0:4], uint32(latRaw2))
+	binary.LittleEndian.PutUint32(posData[4:8], uint32(lonRaw2))
 	vs.Record(1, 129025, ts, posData, 1)
 
 	windData := make([]byte, 8)
