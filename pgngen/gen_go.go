@@ -107,9 +107,14 @@ func GenerateGo(s *Schema, pkg string) string {
 		// Decode function
 		fmt.Fprintf(&b, "// Decode%s decodes PGN %d from raw bytes.\n", structName, p.PGN)
 		fmt.Fprintf(&b, "func Decode%s(data []byte) (%s, error) {\n", structName, structName)
+		// NMEA 2000 devices may omit trailing fields. Pad short data with
+		// 0xFF (the "not available" fill) so missing fields decode to their
+		// "not available" sentinel values instead of erroring out.
 		fmt.Fprintf(&b, "\tif len(data) < %d {\n", minBytes)
-		fmt.Fprintf(&b, "\t\treturn %s{}, fmt.Errorf(\"pgn %d: need %d bytes, got %%d\", len(data))\n",
-			structName, p.PGN, minBytes)
+		fmt.Fprintf(&b, "\t\tpadded := make([]byte, %d)\n", minBytes)
+		fmt.Fprintf(&b, "\t\tfor i := range padded { padded[i] = 0xFF }\n")
+		b.WriteString("\t\tcopy(padded, data)\n")
+		b.WriteString("\t\tdata = padded\n")
 		b.WriteString("\t}\n")
 		fmt.Fprintf(&b, "\tvar m %s\n", structName)
 		for _, f := range p.Fields {

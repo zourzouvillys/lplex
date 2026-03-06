@@ -212,10 +212,18 @@ func TestProductInformationRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDecodeTooShort(t *testing.T) {
-	_, err := DecodePositionRapidUpdate([]byte{0, 1, 2})
-	if err == nil {
-		t.Fatal("expected error for short data")
+func TestDecodeShortDataPadded(t *testing.T) {
+	// NMEA 2000 devices may omit trailing fields. Short data should be
+	// padded with 0xFF ("not available") rather than returning an error.
+	m, err := DecodePositionRapidUpdate([]byte{0, 1, 2})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Remaining bytes were padded with 0xFF, so longitude should be the
+	// "not available" sentinel (all bits set = -1 as int32).
+	wantLon := float64(int32(-1)) * 1e-7
+	if m.Longitude != wantLon {
+		t.Errorf("longitude = %v, want %v (not-available sentinel)", m.Longitude, wantLon)
 	}
 }
 
