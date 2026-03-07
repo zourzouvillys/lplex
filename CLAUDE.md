@@ -146,7 +146,7 @@ lplex-cloud process
 | `lplexc/` | Public Go client library: Subscribe, Devices, Send, Session, mDNS discovery |
 | `canbus/` | Public CAN ID parsing (`CANHeader`, `ParseCANID`, `BuildCANID`) and ISO NAME decoding |
 | `journal/` | Public journal format: `Device`, `Reader`, `CompressionType`, block constants, length-prefixed string helpers |
-| `pgn/` | Generated Go types for NMEA 2000 PGNs: structs, `Decode*`/`Encode` methods, `Registry` map (~120 entries, includes `PGNInfo` with `FastPacket`, `Interval`, `OnDemand`, `Draft` metadata). Name-only PGNs have `Decode: nil` but still carry description and metadata. Generated from `pgn/defs/*.pgn` via `go generate`. Hand-written helpers live alongside generated code (e.g. `victron.go` for register name lookup, `gnss_sats.go` for variable-length PGN 129540). |
+| `pgn/` | Generated Go types for NMEA 2000 PGNs: structs, `Decode*`/`Encode` methods, `Registry` map (~123 entries, includes `PGNInfo` with `FastPacket`, `Interval`, `OnDemand`, `Draft` metadata). Name-only PGNs have `Decode: nil` but still carry description and metadata. Generated from `pgn/defs/*.pgn` via `go generate`. Generated output files (`pgn_gen.go`, `helpers_gen.go`, `proto/pgn.proto`, `schema.json`) are gitignored and must be regenerated after DSL changes. Hand-written helpers live alongside generated code (e.g. `victron.go` for register name lookup, `gnss_sats.go` for variable-length PGN 129540). AIS PGNs with field definitions: 129038 (Class A Position), 129039 (Class B Position), 129041 (AtoN), 129793 (UTC/Date), 129809 (Static Part A), 129810 (Static Part B). |
 | `pgngen/` | PGN DSL parser and code generators (Go, Protobuf, JSON Schema). AST, bit-level field layout, scaling, enums, lookup tables, value-based dispatch for proprietary PGNs, `repeat=N` for repeated fields (generates slices or maps), PGN-level metadata (`fast_packet`, `interval=`, `on_demand`, `draft`). Supports name-only PGNs (no braces = no field layout, `Decode: nil`) and unknown fields (`?` marker for observed but undocumented data). |
 | `proto/replication/v1/` | Protobuf + gRPC definitions for replication protocol |
 | `website/` | Docusaurus docs site, deployed to GitHub Pages. See [`website/CLAUDE.md`](website/CLAUDE.md) for structure and sync rules. |
@@ -255,6 +255,7 @@ The documentation site lives in `website/` (Docusaurus). See [`website/CLAUDE.md
 - No mocks in tests, real instances only
 - CAN ID is 29-bit extended (NMEA 2000 only)
 - All data encodings follow NMEA 2000: little-endian, 0xFF padding, fast-packet protocol
+- AIS string fields use `@` (0x40) or space (0x20) padding; `decodeFixedStr` only terminates at `0x00`/`0xFF`, so callers must trim `@` and trailing spaces from AIS names
 - Sequence numbers start at 1 (0 means "never ACK'd")
 - Protobuf regeneration: `make proto` (requires `protoc`, `protoc-gen-go`, `protoc-gen-go-grpc`)
 
