@@ -192,12 +192,20 @@ func GenerateGo(s *Schema, pkg string) string {
 				p.PGN, p.PGN, p.Description, pgnMetaFields(meta), structName)
 		} else {
 			// Dispatch group: use the dispatch function. Pick the default variant's
-			// description, or the first variant if no default exists.
+			// description, or the name-only entry (generic PGN name) if all
+			// variants have match constraints. Falls back to the first variant.
 			desc := s.PGNs[g.indices[0]].Description
+			foundDefault := false
 			for _, idx := range g.indices {
 				if !hasMatchValues(&s.PGNs[idx]) {
 					desc = s.PGNs[idx].Description
+					foundDefault = true
 					break
+				}
+			}
+			if !foundDefault {
+				if no, ok := nameOnlyPGNs[pgn]; ok {
+					desc = no.Description
 				}
 			}
 			fmt.Fprintf(&b, "\t%d: {PGN: %d, Description: %q, %sDecode: Decode%d},\n",

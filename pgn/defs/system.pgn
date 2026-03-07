@@ -54,6 +54,7 @@ pgn 126993 "Heartbeat" interval=60000ms {
 # PGN 61184 — Proprietary Single Frame
 # Dispatched by manufacturer_code. Only recognized manufacturers get decoded;
 # unknown manufacturer codes return an error from the dispatch function.
+pgn 61184 "Proprietary Single Frame"
 
 # Victron VE.Can register IDs.
 # Source: canboat, esphome-victron-vedirect, Victron VE.Can registers public doc.

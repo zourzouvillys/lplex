@@ -133,7 +133,7 @@ func TestProprietaryRegistry(t *testing.T) {
 	if !ok {
 		t.Fatal("PGN 61184 not in registry")
 	}
-	if info.Description != "Victron Battery Register" {
+	if info.Description != "Proprietary Single Frame" {
 		t.Errorf("description = %q", info.Description)
 	}
 }
