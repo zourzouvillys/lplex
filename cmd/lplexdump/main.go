@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -816,7 +817,7 @@ func runEphemeral(ctx context.Context, client *lplexc.Client, jsonMode, decode, 
 
 	log.Printf("streaming (ephemeral)")
 
-	return streamEvents(sub, jsonMode, decode, changes, devices, lastSeq)
+	return streamEvents(sub, jsonMode, decode, changes, filter, devices, lastSeq)
 }
 
 func runBuffered(ctx context.Context, client *lplexc.Client, clientID, bufferTimeout string, ackInterval time.Duration, jsonMode, decode, changes bool, filter *lplexc.Filter, devices *deviceMap, lastSeq *atomic.Uint64) error {
@@ -873,7 +874,7 @@ func runBuffered(ctx context.Context, client *lplexc.Client, clientID, bufferTim
 		}
 	})
 
-	err = streamEvents(sub, jsonMode, decode, changes, devices, lastSeq)
+	err = streamEvents(sub, jsonMode, decode, changes, filter, devices, lastSeq)
 
 	ackCancel()
 	wg.Wait()
@@ -881,7 +882,7 @@ func runBuffered(ctx context.Context, client *lplexc.Client, clientID, bufferTim
 	return err
 }
 
-func streamEvents(sub *lplexc.Subscription, jsonMode, decode, changes bool, devices *deviceMap, lastSeq *atomic.Uint64) error {
+func streamEvents(sub *lplexc.Subscription, jsonMode, decode, changes bool, filter *lplexc.Filter, devices *deviceMap, lastSeq *atomic.Uint64) error {
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 
@@ -939,6 +940,17 @@ func streamEvents(sub *lplexc.Subscription, jsonMode, decode, changes bool, devi
 		if ev.Frame != nil {
 			if ev.Frame.Seq > 0 {
 				lastSeq.Store(ev.Frame.Seq)
+			}
+
+			// Client-side PGN filtering. The server should also filter, but
+			// older deployments may not support all filter params.
+			if filter != nil {
+				if len(filter.PGNs) > 0 && !slices.Contains(filter.PGNs, ev.Frame.PGN) {
+					continue
+				}
+				if len(filter.ExcludePGNs) > 0 && slices.Contains(filter.ExcludePGNs, ev.Frame.PGN) {
+					continue
+				}
 			}
 
 			var ct lplex.ChangeEventType
