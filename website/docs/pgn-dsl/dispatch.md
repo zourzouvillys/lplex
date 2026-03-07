@@ -21,7 +21,7 @@ pgn 61184 "Victron Battery Register" {
   manufacturer_code  uint16  :11  value=358
   _                          :2
   industry_code      uint8   :3
-  register_id        uint16  :16  lookup=VictronRegister
+  register           uint16  :16  lookup=VictronRegister
   payload            uint32  :32
 }
 ```

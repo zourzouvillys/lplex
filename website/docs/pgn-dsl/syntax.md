@@ -189,10 +189,10 @@ wind_reference  WindReference  :3
 Use a previously defined lookup name as the type:
 
 ```
-register_id  uint16  :16  lookup=VictronRegister
+register  uint16  :16  lookup=VictronRegister
 ```
 
-The `lookup=` attribute can also be used on integer fields to add a `Name()` method without changing the underlying type.
+The `lookup=` attribute adds a `Name()` method and a `LookupFields()` method without changing the underlying type. Display tools wrap lookup fields as `{"id": <raw>, "name": "..."}` objects in JSON output.
 
 ## Field attributes
 

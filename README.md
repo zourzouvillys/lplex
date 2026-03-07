@@ -630,14 +630,15 @@ pgn 61184 "Victron Battery Register" {
   manufacturer_code  uint16  :11  value=358
   _                          :2
   industry_code      uint8   :3
-  register_id        uint16  :16  lookup=VictronRegister
+  register           uint16  :16  lookup=VictronRegister
   payload            uint32  :32
 }
 ```
 
 The generator produces:
 - A `map[uint16]string` variable (`victronRegisterNames`) with all key-name pairs
-- A `RegisterIdName() string` method on the struct that returns the human-readable name (or empty string if unknown)
+- A `RegisterName() string` method on the struct that returns the human-readable name (or empty string if unknown)
+- A `LookupFields() map[string]string` method for display code to wrap the field as `{"id": <raw>, "name": "..."}`
 
 Keys support hex (`0xFF`) and decimal (`255`) literals. Valid key types: `uint8`, `uint16`, `uint32`, `uint64`.
 
@@ -651,7 +652,7 @@ pgn 61184 "Victron Battery Register" {
   manufacturer_code  uint16  :11  value=358
   _                          :2
   industry_code      uint8   :3
-  register_id        uint16  :16
+  register           uint16  :16
   payload            uint32  :32
 }
 

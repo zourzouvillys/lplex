@@ -978,6 +978,8 @@ func formatFrame(w *bufio.Writer, f *lplexc.Frame, dm *deviceMap, decode bool, c
 }
 
 // decodeFrame attempts to decode a frame's hex data using the pgn.Registry.
+// If the decoded struct has lookup fields, the result is wrapped so those fields
+// serialize as {"id": <value>, "name": "..."} objects instead of flat integers.
 func decodeFrame(f *lplexc.Frame) (any, error) {
 	info, ok := pgn.Registry[f.PGN]
 	if !ok || info.Decode == nil {
@@ -987,7 +989,61 @@ func decodeFrame(f *lplexc.Frame) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return info.Decode(data)
+	v, err := info.Decode(data)
+	if err != nil {
+		return nil, err
+	}
+	return withLookupNames(v), nil
+}
+
+// lookupFielder is implemented by generated PGN structs that have lookup= fields.
+type lookupFielder interface {
+	LookupFields() map[string]string
+}
+
+// withLookupNames wraps a decoded PGN value so lookup fields serialize as
+// {"id": <raw>, "name": "..."} objects instead of flat integers.
+func withLookupNames(v any) any {
+	lf, ok := v.(lookupFielder)
+	if !ok {
+		return v
+	}
+	fields := lf.LookupFields()
+	if len(fields) == 0 {
+		return v
+	}
+	return &annotatedDecoded{value: v, fields: fields}
+}
+
+// annotatedDecoded wraps a decoded PGN struct, transforming lookup fields from flat
+// integers into {"id": <value>} or {"id": <value>, "name": "..."} objects.
+type annotatedDecoded struct {
+	value  any
+	fields map[string]string // JSON field name -> resolved lookup name ("" if unknown)
+}
+
+func (a *annotatedDecoded) MarshalJSON() ([]byte, error) {
+	b, err := json.Marshal(a.value)
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return b, nil
+	}
+	type lookupObj struct {
+		ID   json.RawMessage `json:"id"`
+		Name string          `json:"name,omitempty"`
+	}
+	for jsonKey, name := range a.fields {
+		val, ok := raw[jsonKey]
+		if !ok {
+			continue
+		}
+		obj, _ := json.Marshal(lookupObj{ID: val, Name: name})
+		raw[jsonKey] = obj
+	}
+	return json.Marshal(raw)
 }
 
 // writeJSONFrame writes a frame as a JSON line, optionally with decoded fields.

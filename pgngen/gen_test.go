@@ -595,6 +595,14 @@ pgn 99999 "Test Device" {
 	if !strings.Contains(code, "return statusCodeNames[m.Status]") {
 		t.Error("StatusName method should index into statusCodeNames")
 	}
+
+	// LookupFields aggregator should exist.
+	if !strings.Contains(code, "func (m TestDevice) LookupFields() map[string]string {") {
+		t.Error("missing LookupFields method")
+	}
+	if !strings.Contains(code, `"status": statusCodeNames[m.Status]`) {
+		t.Error("LookupFields should map status to its lookup table")
+	}
 }
 
 func TestGenerateGoLookupNoRef(t *testing.T) {
@@ -625,6 +633,9 @@ pgn 99999 "Test Device" {
 	// No method should be generated since no field references it.
 	if strings.Contains(code, "Name() string") {
 		t.Error("unexpected Name method for unreferenced lookup")
+	}
+	if strings.Contains(code, "LookupFields()") {
+		t.Error("unexpected LookupFields method for struct with no lookup fields")
 	}
 }
 

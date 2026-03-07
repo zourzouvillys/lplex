@@ -134,6 +134,7 @@ func GenerateGo(s *Schema, pkg string) string {
 		}
 		writeVariant(&b, p)
 		writeLookupMethods(&b, p, lookupMap)
+		writeLookupFieldsMethod(&b, p, lookupMap)
 	}
 
 	// Dispatch functions for PGN groups that need value-based routing.
@@ -405,6 +406,34 @@ func writeLookupMethods(b *strings.Builder, p PGNDef, lookupMap map[string]*Look
 		fmt.Fprintf(b, "\treturn %s[m.%s]\n", varName, toPascal(f.Name))
 		b.WriteString("}\n\n")
 	}
+}
+
+// writeLookupFieldsMethod generates a LookupFields() method that returns the resolved
+// lookup names for all lookup fields. Display code uses this to wrap lookup fields as
+// {"id": <raw>, "name": "..."} objects in JSON output.
+func writeLookupFieldsMethod(b *strings.Builder, p PGNDef, lookupMap map[string]*LookupDef) {
+	var fields []FieldDef
+	for _, f := range p.Fields {
+		if f.LookupRef != "" && lookupMap[f.LookupRef] != nil {
+			fields = append(fields, f)
+		}
+	}
+	if len(fields) == 0 {
+		return
+	}
+
+	structName := toPascal(p.Description)
+	fmt.Fprintf(b, "// LookupFields returns JSON field name -> resolved lookup name for all lookup fields.\n")
+	fmt.Fprintf(b, "// Empty string means the value has no match in the lookup table.\n")
+	fmt.Fprintf(b, "func (m %s) LookupFields() map[string]string {\n", structName)
+	fmt.Fprintf(b, "\treturn map[string]string{\n")
+	for _, f := range fields {
+		l := lookupMap[f.LookupRef]
+		varName := toLowerCamel(l.Name) + "Names"
+		fmt.Fprintf(b, "\t\t%q: %s[m.%s],\n", toSnake(f.Name), varName, toPascal(f.Name))
+	}
+	b.WriteString("\t}\n")
+	b.WriteString("}\n\n")
 }
 
 // writeEncodeConstrained emits Go code to encode a literal value into the field's bit position.

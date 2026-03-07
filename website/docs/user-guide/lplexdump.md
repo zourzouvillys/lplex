@@ -71,6 +71,14 @@ When stdout is piped (or `-json` is set), each frame is a JSON object per line:
 
 The `decoded` field is only present when `-decode` is enabled and the PGN is known.
 
+Fields with `lookup=` attributes in the PGN DSL are displayed as structured objects instead of flat integers:
+
+```json
+{"register": {"id": 4095, "name": "State of Charge"}, "payload": 10000}
+```
+
+Unknown lookup values omit the `name` field: `{"register": {"id": 769}}`.
+
 ## Journal replay
 
 Replay a recorded journal file instead of connecting to a live server:

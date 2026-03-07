@@ -96,11 +96,16 @@ var victronRegisterNames = map[uint16]string{
     0xEDD3: "Yield Today",
 }
 
-func VictronRegisterName(v uint16) string {
-    if name, ok := victronRegisterNames[v]; ok {
-        return name
+// RegisterName returns the human-readable name, or empty if unknown.
+func (m VictronBatteryRegister) RegisterName() string {
+    return victronRegisterNames[m.Register]
+}
+
+// LookupFields returns JSON field name -> resolved name for display code.
+func (m VictronBatteryRegister) LookupFields() map[string]string {
+    return map[string]string{
+        "register": victronRegisterNames[m.Register],
     }
-    return ""
 }
 ```
 
@@ -108,11 +113,13 @@ func VictronRegisterName(v uint16) string {
 
 ```
 pgn 61184 "Victron Battery Register" {
-  register_id  uint16  :16  lookup=VictronRegister
+  register  uint16  :16  lookup=VictronRegister
 }
 ```
 
-The Go struct field stays `uint16` (no new type), but gains a `RegisterIDName() string` helper method on the struct.
+The Go struct field stays `uint16` (no new type), but gains a `RegisterName() string` helper method and a `LookupFields()` method for display code.
+
+Display tools like `lplexdump` use `LookupFields()` to wrap lookup fields as `{"id": <raw>, "name": "..."}` objects in JSON output. Unknown values omit the `name` field.
 
 ### When to use lookups
 
@@ -129,5 +136,5 @@ The Go struct field stays `uint16` (no new type), but gains a `RegisterIDName() 
 | `String()` | Yes (on the type) | `Name()` function |
 | Type safety | Yes | No |
 | Key space | Dense (0, 1, 2, ...) | Sparse (any values) |
-| JSON output | String value | Integer (with name available) |
+| JSON output | String value | `{"id": <raw>, "name": "..."}` object |
 | Use case | Small finite sets | Large/sparse mappings |
