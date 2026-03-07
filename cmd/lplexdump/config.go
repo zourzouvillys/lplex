@@ -16,13 +16,13 @@ type BoatConfig struct {
 	Cloud string // cloud fallback URL, e.g. "https://lplex.dockwise.app/instances/sv-dockwise"
 }
 
-// defaultConfigPath returns ~/.config/lplexdump.conf.
+// defaultConfigPath returns ~/.config/lplex/lplexdump.conf.
 func defaultConfigPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".config", "lplexdump.conf")
+	return filepath.Join(home, ".config", "lplex", "lplexdump.conf")
 }
 
 // loadBoatConfig reads the HOCON config file and returns all boats defined

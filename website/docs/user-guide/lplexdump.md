@@ -29,7 +29,7 @@ lplexdump -server http://inuc1.local:8089 -decode
 |---|---|---|
 | `-server` | (mDNS) | Server URL |
 | `-boat` | (empty) | Connect to a named boat (mDNS first, cloud fallback) |
-| `-config` | `~/.config/lplexdump.conf` | Path to config file |
+| `-config` | `~/.config/lplex/lplexdump.conf` | Path to config file |
 | `-client-id` | hostname | Session ID for buffered mode |
 | `-buffer-timeout` | (empty) | Enable buffered mode with this timeout (ISO 8601) |
 | `-reconnect` | `true` | Auto-reconnect on disconnect |
@@ -90,7 +90,7 @@ The `-boat` flag automates server discovery with local-first, cloud-fallback beh
 
 ### Config file
 
-Create `~/.config/lplexdump.conf` (HOCON format):
+Create `~/.config/lplex/lplexdump.conf` (HOCON format):
 
 ```hocon
 boats {

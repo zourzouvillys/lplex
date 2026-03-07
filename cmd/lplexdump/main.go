@@ -74,8 +74,8 @@ func main() {
 	changes := flag.Bool("changes", false, "only show frames with changed data (suppress duplicates)")
 
 	// Boat discovery flags.
-	boatName := flag.String("boat", "", "connect to a named boat (mDNS first, cloud fallback; see ~/.config/lplexdump.conf)")
-	configPath := flag.String("config", "", "path to lplexdump config file (default: ~/.config/lplexdump.conf)")
+	boatName := flag.String("boat", "", "connect to a named boat (mDNS first, cloud fallback; see ~/.config/lplex/lplexdump.conf)")
+	configPath := flag.String("config", "", "path to lplexdump config file (default: ~/.config/lplex/lplexdump.conf)")
 
 	// Journal flags.
 	filePath := flag.String("file", "", "replay from .lpj journal file (mutually exclusive with -server)")
