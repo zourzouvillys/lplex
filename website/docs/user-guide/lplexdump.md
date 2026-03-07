@@ -90,7 +90,7 @@ lplexdump -file recording.lpj
 # Fast-forward at 10x
 lplexdump -file recording.lpj -speed 10
 
-# As fast as possible
+# As fast as possible (0 is a special value; default is 1.0 = real-time)
 lplexdump -file recording.lpj -speed 0
 
 # Seek to a specific time
