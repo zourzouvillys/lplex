@@ -192,7 +192,7 @@ Use a previously defined lookup name as the type:
 register_id  uint16  :16  lookup=VictronRegister
 ```
 
-The `lookup=` attribute can also be used on integer fields to add a `Name()` method without changing the underlying type.
+The `lookup=` attribute adds a `Name()` method without changing the underlying type. If the field name ends in `_id`, the suffix is stripped in the generated Go name and JSON tag (the display layer wraps lookup fields as `{"id": <raw>, "name": "..."}` objects).
 
 ## Field attributes
 

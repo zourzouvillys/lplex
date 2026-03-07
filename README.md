@@ -637,7 +637,10 @@ pgn 61184 "Victron Battery Register" {
 
 The generator produces:
 - A `map[uint16]string` variable (`victronRegisterNames`) with all key-name pairs
-- A `RegisterIdName() string` method on the struct that returns the human-readable name (or empty string if unknown)
+- A `RegisterName() string` method on the struct that returns the human-readable name (or empty string if unknown)
+- A `LookupFields() map[string]string` method for display code to wrap the field as `{"id": <raw>, "name": "..."}`
+
+Fields ending in `_id` with a `lookup=` attribute have the suffix stripped in the generated Go name and JSON tag (e.g. `register_id` becomes `Register`/`"register"`) since the object wrapper already provides the `id` semantics.
 
 Keys support hex (`0xFF`) and decimal (`255`) literals. Valid key types: `uint8`, `uint16`, `uint32`, `uint64`.
 

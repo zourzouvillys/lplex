@@ -134,6 +134,7 @@ func GenerateGo(s *Schema, pkg string) string {
 		}
 		writeVariant(&b, p)
 		writeLookupMethods(&b, p, lookupMap)
+		writeLookupFieldsMethod(&b, p, lookupMap)
 	}
 
 	// Dispatch functions for PGN groups that need value-based routing.
@@ -255,7 +256,7 @@ func pgnMetaFields(p *PGNDef) string {
 	var tols []string
 	for _, f := range p.Fields {
 		if f.Tolerance != nil {
-			tols = append(tols, fmt.Sprintf("%q: %g", toSnake(f.Name), *f.Tolerance))
+			tols = append(tols, fmt.Sprintf("%q: %g", toSnake(fieldOutputName(f)), *f.Tolerance))
 		}
 	}
 	if len(tols) > 0 {
@@ -270,6 +271,16 @@ func pgnMetaFields(p *PGNDef) string {
 	}
 
 	return s
+}
+
+// fieldOutputName returns the canonical name for a field in generated output.
+// For lookup fields whose DSL name ends in "_id", the suffix is stripped because
+// the JSON output already wraps the value as {"id": ..., "name": ...}.
+func fieldOutputName(f FieldDef) string {
+	if f.LookupRef != "" && strings.HasSuffix(f.Name, "_id") {
+		return strings.TrimSuffix(f.Name, "_id")
+	}
+	return f.Name
 }
 
 // repeatSliceType returns the Go slice type for a repeated field.
@@ -327,12 +338,13 @@ func writeVariant(b *strings.Builder, p PGNDef) {
 			continue
 		}
 		goType := goFieldType(f)
-		tag := fmt.Sprintf("`json:%q`", toSnake(f.Name))
+		outName := fieldOutputName(f)
+		tag := fmt.Sprintf("`json:%q`", toSnake(outName))
 		comment := ""
 		if f.Unit != "" {
 			comment = " // " + f.Unit
 		}
-		fmt.Fprintf(b, "\t%s %s %s%s\n", toPascal(f.Name), goType, tag, comment)
+		fmt.Fprintf(b, "\t%s %s %s%s\n", toPascal(outName), goType, tag, comment)
 	}
 	b.WriteString("}\n\n")
 
@@ -357,7 +369,7 @@ func writeVariant(b *strings.Builder, p PGNDef) {
 			writeDecodeRepeated(b, f)
 			continue
 		}
-		goField := toPascal(f.Name)
+		goField := toPascal(fieldOutputName(f))
 		writeDecodeField(b, f, goField)
 	}
 	b.WriteString("\treturn m, nil\n")
@@ -379,7 +391,7 @@ func writeVariant(b *strings.Builder, p PGNDef) {
 		if f.MatchValue != nil {
 			writeEncodeConstrained(b, f, *f.MatchValue)
 		} else {
-			goField := toPascal(f.Name)
+			goField := toPascal(fieldOutputName(f))
 			writeEncodeField(b, f, goField)
 		}
 	}
@@ -399,12 +411,42 @@ func writeLookupMethods(b *strings.Builder, p PGNDef, lookupMap map[string]*Look
 			continue
 		}
 		varName := toLowerCamel(l.Name) + "Names"
-		methodName := toPascal(f.Name) + "Name"
+		outName := fieldOutputName(f)
+		methodName := toPascal(outName) + "Name"
 		fmt.Fprintf(b, "// %s returns the human-readable name for this field's value, or empty if unknown.\n", methodName)
 		fmt.Fprintf(b, "func (m %s) %s() string {\n", structName, methodName)
-		fmt.Fprintf(b, "\treturn %s[m.%s]\n", varName, toPascal(f.Name))
+		fmt.Fprintf(b, "\treturn %s[m.%s]\n", varName, toPascal(outName))
 		b.WriteString("}\n\n")
 	}
+}
+
+// writeLookupFieldsMethod generates a LookupFields() method that returns the resolved
+// lookup names for all lookup fields. Display code uses this to wrap lookup fields as
+// {"id": <raw>, "name": "..."} objects in JSON output.
+func writeLookupFieldsMethod(b *strings.Builder, p PGNDef, lookupMap map[string]*LookupDef) {
+	var fields []FieldDef
+	for _, f := range p.Fields {
+		if f.LookupRef != "" && lookupMap[f.LookupRef] != nil {
+			fields = append(fields, f)
+		}
+	}
+	if len(fields) == 0 {
+		return
+	}
+
+	structName := toPascal(p.Description)
+	fmt.Fprintf(b, "// LookupFields returns JSON field name -> resolved lookup name for all lookup fields.\n")
+	fmt.Fprintf(b, "// Empty string means the value has no match in the lookup table.\n")
+	fmt.Fprintf(b, "func (m %s) LookupFields() map[string]string {\n", structName)
+	fmt.Fprintf(b, "\treturn map[string]string{\n")
+	for _, f := range fields {
+		l := lookupMap[f.LookupRef]
+		varName := toLowerCamel(l.Name) + "Names"
+		outName := fieldOutputName(f)
+		fmt.Fprintf(b, "\t\t%q: %s[m.%s],\n", toSnake(outName), varName, toPascal(outName))
+	}
+	b.WriteString("\t}\n")
+	b.WriteString("}\n\n")
 }
 
 // writeEncodeConstrained emits Go code to encode a literal value into the field's bit position.
