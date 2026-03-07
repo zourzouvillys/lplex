@@ -1,5 +1,13 @@
 # Environment PGNs
 
+pgn 130560 "Payload Mass"
+pgn 130567 "Watermaker Input Setting and Status" fast_packet
+pgn 130569 "Current Status and Control"
+pgn 130570 "AC Input Status"
+pgn 130571 "AC Output Status"
+pgn 130572 "AC Input Configuration"
+pgn 130573 "AC Output Configuration"
+
 enum TemperatureSource {
   0 = "sea"
   1 = "outside"
@@ -36,7 +44,7 @@ enum PressureSource {
 }
 
 # PGN 130306 — Wind Data
-pgn 130306 "Wind Data" {
+pgn 130306 "Wind Data" interval=100ms {
   sid              uint8          :8
   wind_speed       uint16         :16  scale=0.01   unit="m/s"
   wind_angle       uint16         :16  scale=0.0001 unit="rad"
@@ -46,7 +54,7 @@ pgn 130306 "Wind Data" {
 }
 
 # PGN 130310 — Environmental Parameters (Outside)
-pgn 130310 "Environmental Parameters Outside" {
+pgn 130310 "Environmental Parameters Outside" interval=500ms {
   sid                    uint8   :8
   water_temperature      uint16  :16  scale=0.01    unit="K"
   outside_temperature    uint16  :16  scale=0.01    unit="K"
@@ -55,7 +63,7 @@ pgn 130310 "Environmental Parameters Outside" {
 }
 
 # PGN 130311 — Environmental Parameters (Inside)
-pgn 130311 "Environmental Parameters Inside" {
+pgn 130311 "Environmental Parameters Inside" interval=500ms {
   sid                    uint8             :8
   temperature_source     TemperatureSource :6
   humidity_source        HumiditySource    :2
@@ -65,7 +73,7 @@ pgn 130311 "Environmental Parameters Inside" {
 }
 
 # PGN 130312 — Temperature
-pgn 130312 "Temperature" {
+pgn 130312 "Temperature" interval=2000ms {
   sid                  uint8             :8
   instance             uint8             :8
   temperature_source   TemperatureSource :8
@@ -75,7 +83,7 @@ pgn 130312 "Temperature" {
 }
 
 # PGN 130313 — Humidity
-pgn 130313 "Humidity" {
+pgn 130313 "Humidity" interval=2000ms {
   sid               uint8           :8
   instance          uint8           :8
   humidity_source   HumiditySource  :8
@@ -85,7 +93,7 @@ pgn 130313 "Humidity" {
 }
 
 # PGN 130314 — Actual Pressure
-pgn 130314 "Actual Pressure" {
+pgn 130314 "Actual Pressure" interval=2000ms {
   sid               uint8           :8
   instance          uint8           :8
   pressure_source   PressureSource  :8
@@ -94,7 +102,7 @@ pgn 130314 "Actual Pressure" {
 }
 
 # PGN 130316 — Temperature Extended Range
-pgn 130316 "Temperature Extended Range" {
+pgn 130316 "Temperature Extended Range" interval=2000ms {
   sid                  uint8             :8
   instance             uint8             :8
   temperature_source   TemperatureSource :8

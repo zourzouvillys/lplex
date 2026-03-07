@@ -73,6 +73,7 @@ func init() {
 	Registry[129540] = PGNInfo{
 		PGN:         129540,
 		Description: "GNSS Sats in View",
+		FastPacket:  true,
 		Decode:      func(data []byte) (any, error) { return DecodeGNSSSatsInView(data) },
 	}
 }

@@ -452,8 +452,8 @@ pgn 61184 "Test" {
 	if err == nil {
 		t.Fatal("expected error for value= on reserved field")
 	}
-	if !strings.Contains(err.Error(), "reserved field cannot have value=") {
-		t.Errorf("error = %q, want substring about reserved field", err.Error())
+	if !strings.Contains(err.Error(), "cannot have value=") {
+		t.Errorf("error = %q, want substring about value= restriction", err.Error())
 	}
 }
 
@@ -507,8 +507,8 @@ pgn 99999 "Test" {
 	if err == nil {
 		t.Fatal("expected error for lookup= on reserved field")
 	}
-	if !strings.Contains(err.Error(), "reserved field cannot have lookup=") {
-		t.Errorf("error = %q, want substring about reserved field", err.Error())
+	if !strings.Contains(err.Error(), "cannot have lookup=") {
+		t.Errorf("error = %q, want substring about lookup= restriction", err.Error())
 	}
 }
 
@@ -742,7 +742,7 @@ pgn 99999 "Test" {
   _  :2  repeat=4
 }
 `,
-			wantErr: "reserved field cannot have repeat=",
+			wantErr: "cannot have repeat=",
 		},
 		{
 			name: "repeat=1",
@@ -1062,6 +1062,254 @@ pgn 127501 "Test" {
 	}
 	if !strings.Contains(js, `"additionalProperties"`) {
 		t.Error("missing additionalProperties for map mode")
+	}
+}
+
+func TestGenerateGoMetadata(t *testing.T) {
+	src := `
+pgn 129029 "GNSS Position Data" fast_packet interval=1000ms {
+  sid  uint8  :8
+}
+
+pgn 59904 "ISO Request" on_demand {
+  requested_pgn  uint32  :24
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	code := GenerateGo(s, "pgn")
+
+	// PGNInfo struct should have metadata fields.
+	if !strings.Contains(code, "FastPacket  bool") {
+		t.Error("missing FastPacket field in PGNInfo")
+	}
+	if !strings.Contains(code, "Interval    time.Duration") {
+		t.Error("missing Interval field in PGNInfo")
+	}
+	if !strings.Contains(code, "OnDemand    bool") {
+		t.Error("missing OnDemand field in PGNInfo")
+	}
+
+	// Registry entries should include metadata.
+	if !strings.Contains(code, "FastPacket: true") {
+		t.Error("missing FastPacket: true in registry entry for 129029")
+	}
+	if !strings.Contains(code, "Interval: 1000 * time.Millisecond") {
+		t.Error("missing Interval in registry entry for 129029")
+	}
+	if !strings.Contains(code, "OnDemand: true") {
+		t.Error("missing OnDemand: true in registry entry for 59904")
+	}
+
+	// time import should be present.
+	if !strings.Contains(code, `"time"`) {
+		t.Error("missing time import")
+	}
+}
+
+func TestGenerateGoNameOnly(t *testing.T) {
+	src := `
+pgn 129038 "AIS Class A Position Report" fast_packet
+pgn 129039 "AIS Class B Position Report" fast_packet
+
+pgn 129025 "Position Rapid Update" {
+  latitude   int32  :32  scale=1e-7  unit="deg"
+  longitude  int32  :32  scale=1e-7  unit="deg"
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	code := GenerateGo(s, "pgn")
+
+	// Name-only PGNs should NOT get structs or decode functions.
+	if strings.Contains(code, "type AISClassAPositionReport struct") {
+		t.Error("name-only PGN should not have a struct")
+	}
+	if strings.Contains(code, "func DecodeAISClassAPositionReport") {
+		t.Error("name-only PGN should not have a decode function")
+	}
+
+	// But they SHOULD appear in the Registry with nil Decode.
+	if !strings.Contains(code, `129038: {PGN: 129038, Description: "AIS Class A Position Report"`) {
+		t.Error("name-only PGN 129038 missing from Registry")
+	}
+	if !strings.Contains(code, `129039: {PGN: 129039, Description: "AIS Class B Position Report"`) {
+		t.Error("name-only PGN 129039 missing from Registry")
+	}
+	// Verify name-only entries have FastPacket set.
+	if !strings.Contains(code, `129038: {PGN: 129038, Description: "AIS Class A Position Report", FastPacket: true,`) {
+		t.Error("name-only PGN 129038 should have FastPacket: true")
+	}
+
+	// Field-defined PGN should still work normally.
+	if !strings.Contains(code, "type PositionRapidUpdate struct") {
+		t.Error("field-defined PGN should have a struct")
+	}
+	if !strings.Contains(code, "func DecodePositionRapidUpdate") {
+		t.Error("field-defined PGN should have a decode function")
+	}
+}
+
+func TestGenerateGoDraft(t *testing.T) {
+	src := `
+pgn 127493 "Transmission Parameters Dynamic" draft {
+  engine_instance  uint8  :8
+  gear             uint8  :2
+  _                        :6
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	code := GenerateGo(s, "pgn")
+
+	if !strings.Contains(code, "Draft       bool") {
+		t.Error("missing Draft field in PGNInfo")
+	}
+	if !strings.Contains(code, "Draft: true") {
+		t.Error("Draft: true missing from registry entry")
+	}
+}
+
+func TestGenerateGoUnknownField(t *testing.T) {
+	src := `
+pgn 127493 "Test PGN" {
+  engine_instance  uint8   :8
+  ?                         :32
+  known_field      uint16  :16
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	code := GenerateGo(s, "pgn")
+
+	// Struct should have engine_instance and known_field but not the unknown.
+	if !strings.Contains(code, "EngineInstance uint8") {
+		t.Error("missing EngineInstance field")
+	}
+	if !strings.Contains(code, "KnownField uint16") {
+		t.Error("missing KnownField field")
+	}
+	// The unknown field should be skipped from the struct entirely.
+	// The struct should only have 2 fields.
+	structStart := strings.Index(code, "type TestPGN struct")
+	if structStart < 0 {
+		t.Fatal("missing TestPGN struct")
+	}
+	structEnd := strings.Index(code[structStart:], "\n}\n")
+	structBody := code[structStart : structStart+structEnd]
+	if strings.Count(structBody, "\t") > 3 { // type line + 2 fields
+		// Just verify the unknown bits don't generate a struct field named "?"
+		if strings.Contains(structBody, "? ") {
+			t.Error("unknown field should not appear in struct")
+		}
+	}
+}
+
+func TestGenerateGoNameOnlyNilDecode(t *testing.T) {
+	// Verify that calling Registry[name-only-pgn].Decode would be nil.
+	src := `pgn 59392 "ISO Ack"`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	code := GenerateGo(s, "pgn")
+
+	// Registry entry should NOT have a Decode field (defaults to nil).
+	entry := `59392: {PGN: 59392, Description: "ISO Ack", },`
+	if !strings.Contains(code, entry) {
+		// Find what it actually generated
+		idx := strings.Index(code, "59392:")
+		if idx < 0 {
+			t.Fatal("PGN 59392 not in registry at all")
+		}
+		lineEnd := strings.Index(code[idx:], "\n")
+		t.Errorf("registry line = %q, want %q", code[idx:idx+lineEnd], entry)
+	}
+}
+
+func TestGenerateProtoNameOnly(t *testing.T) {
+	src := `
+pgn 129038 "AIS Class A Position Report" fast_packet
+
+pgn 129025 "Position Rapid Update" {
+  latitude   int32  :32  scale=1e-7  unit="deg"
+  longitude  int32  :32  scale=1e-7  unit="deg"
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	proto := GenerateProto(s, "pgn.v1")
+
+	// Name-only should not get a message.
+	if strings.Contains(proto, "message AISClassAPositionReport") {
+		t.Error("name-only PGN should not have a proto message")
+	}
+	// Field-defined should.
+	if !strings.Contains(proto, "message PositionRapidUpdate") {
+		t.Error("field-defined PGN should have a proto message")
+	}
+}
+
+func TestGenerateJSONSchemaNameOnly(t *testing.T) {
+	src := `
+pgn 129038 "AIS Class A Position Report" fast_packet
+
+pgn 129025 "Position Rapid Update" {
+  latitude   int32  :32  scale=1e-7  unit="deg"
+  longitude  int32  :32  scale=1e-7  unit="deg"
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	js := GenerateJSONSchema(s)
+
+	// Name-only should not get a schema definition.
+	if strings.Contains(js, "AISClassAPositionReport") {
+		t.Error("name-only PGN should not have a JSON schema definition")
+	}
+	// Field-defined should.
+	if !strings.Contains(js, "PositionRapidUpdate") {
+		t.Error("field-defined PGN should have a JSON schema definition")
 	}
 }
 

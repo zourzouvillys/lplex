@@ -1,0 +1,25 @@
+# AIS PGNs (all fast-packet)
+
+pgn 129038 "AIS Class A Position Report" fast_packet
+pgn 129039 "AIS Class B Position Report" fast_packet
+pgn 129040 "AIS Class B Extended Position Report" fast_packet
+pgn 129041 "AIS Aids to Navigation Report" fast_packet
+pgn 129792 "AIS DGNSS Broadcast Binary Message" fast_packet
+pgn 129793 "AIS UTC and Date Report" fast_packet
+pgn 129794 "AIS Class A Static and Voyage Related Data" fast_packet
+pgn 129795 "AIS Addressed Binary Message" fast_packet
+pgn 129796 "AIS Acknowledge" fast_packet
+pgn 129797 "AIS Binary Broadcast Message" fast_packet
+pgn 129798 "AIS SAR Aircraft Position Report" fast_packet
+pgn 129799 "Radio Frequency Mode Power" fast_packet
+pgn 129800 "AIS UTC Date Inquiry" fast_packet
+pgn 129801 "AIS Addressed Safety Related Message" fast_packet
+pgn 129802 "AIS Safety Related Broadcast Message" fast_packet
+pgn 129803 "AIS Interrogation" fast_packet
+pgn 129804 "AIS Assignment Mode Command" fast_packet
+pgn 129805 "AIS Data Link Management Message" fast_packet
+pgn 129806 "AIS Channel Management" fast_packet
+pgn 129807 "AIS Group Assignment" fast_packet
+pgn 129808 "DSC Call Information" fast_packet
+pgn 129809 "AIS Class B CS Static Data Part A" fast_packet
+pgn 129810 "AIS Class B CS Static Data Part B" fast_packet

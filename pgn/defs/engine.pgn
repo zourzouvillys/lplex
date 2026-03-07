@@ -1,7 +1,12 @@
 # Engine & Electrical PGNs
 
+pgn 127493 "Transmission Parameters Dynamic"
+pgn 127497 "Trip Parameters Engine"
+pgn 127498 "Engine Parameters Static"
+pgn 127510 "AC Output Status"
+
 # PGN 127488 — Engine Parameters, Rapid Update
-pgn 127488 "Engine Parameters Rapid Update" {
+pgn 127488 "Engine Parameters Rapid Update" interval=100ms {
   engine_instance    uint8   :8
   engine_speed       uint16  :16  scale=0.25   unit="rpm"
   engine_boost       uint16  :16  scale=100    unit="Pa"
@@ -10,7 +15,7 @@ pgn 127488 "Engine Parameters Rapid Update" {
 }
 
 # PGN 127489 — Engine Parameters, Dynamic
-pgn 127489 "Engine Parameters Dynamic" {
+pgn 127489 "Engine Parameters Dynamic" fast_packet interval=500ms {
   engine_instance          uint8   :8
   oil_pressure             uint16  :16  scale=100    unit="Pa"
   oil_temperature          uint16  :16  scale=0.1    unit="K"
@@ -28,13 +33,13 @@ pgn 127489 "Engine Parameters Dynamic" {
 }
 
 # PGN 127501 — Binary Switch Bank Status
-pgn 127501 "Binary Switch Bank Status" {
+pgn 127501 "Binary Switch Bank Status" interval=1000ms {
   instance    uint8   :8
   indicator   uint8   :2  repeat=28
 }
 
 # PGN 127505 — Fluid Level
-pgn 127505 "Fluid Level" {
+pgn 127505 "Fluid Level" interval=2500ms {
   instance    uint8   :4
   fluid_type  uint8   :4
   level       int16   :16  scale=0.004 unit="%"
@@ -43,7 +48,7 @@ pgn 127505 "Fluid Level" {
 }
 
 # PGN 127508 — Battery Status
-pgn 127508 "Battery Status" {
+pgn 127508 "Battery Status" interval=1500ms {
   instance       uint8   :8
   voltage        uint16  :16  scale=0.01  unit="V"
   current        int16   :16  scale=0.1   unit="A"
@@ -52,7 +57,7 @@ pgn 127508 "Battery Status" {
 }
 
 # PGN 127513 — Battery Configuration Status
-pgn 127513 "Battery Configuration Status" {
+pgn 127513 "Battery Configuration Status" fast_packet interval=10000ms {
   instance             uint8   :8
   battery_type         uint8   :4
   supports_equal       uint8   :2
@@ -65,7 +70,7 @@ pgn 127513 "Battery Configuration Status" {
 }
 
 # PGN 127506 — DC Detailed Status
-pgn 127506 "DC Detailed Status" {
+pgn 127506 "DC Detailed Status" fast_packet interval=1500ms {
   sid                uint8   :8
   instance           uint8   :8
   dc_type            uint8   :8
@@ -79,7 +84,7 @@ pgn 127506 "DC Detailed Status" {
 # PGN 127509 — Inverter Status
 # Reports operating state of a DC-to-AC inverter. Obsolete per NMEA,
 # superseded by PGN 127511, but still widely transmitted (e.g. Victron).
-pgn 127509 "Inverter Status" {
+pgn 127509 "Inverter Status" fast_packet interval=1500ms {
   instance          uint8   :8
   ac_instance       uint8   :8
   dc_instance       uint8   :8
@@ -90,7 +95,7 @@ pgn 127509 "Inverter Status" {
 
 # PGN 127750 — Converter Status
 # Reports the state of a DC/DC or DC/AC converter (charger, inverter, or combo).
-pgn 127750 "Converter Status" {
+pgn 127750 "Converter Status" interval=1500ms {
   sid                    uint8   :8
   connection_number      uint8   :8
   operating_state        uint8   :8
@@ -102,7 +107,7 @@ pgn 127750 "Converter Status" {
 }
 
 # PGN 127507 — Charger Status
-pgn 127507 "Charger Status" {
+pgn 127507 "Charger Status" interval=1500ms {
   instance             uint8   :8
   battery_instance     uint8   :8
   operating_state      uint8   :4

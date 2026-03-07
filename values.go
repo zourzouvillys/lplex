@@ -239,7 +239,7 @@ func (vs *ValueStore) DecodedSnapshot(devices *DeviceRegistry, filter *EventFilt
 	sources := make(map[uint8]struct{})
 	for _, e := range entries {
 		info, ok := pgn.Registry[e.key.PGN]
-		if !ok {
+		if !ok || info.Decode == nil {
 			continue
 		}
 		decoded, err := info.Decode(e.val.Data)

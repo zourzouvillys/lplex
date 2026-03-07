@@ -23,8 +23,11 @@ func GenerateGo(s *Schema, pkg string) string {
 	needsFmt := false
 	needsMath := false
 	for _, p := range s.PGNs {
+		if p.IsNameOnly() {
+			continue
+		}
 		for _, f := range p.Fields {
-			if f.IsReserved() {
+			if f.IsSkipped() {
 				continue
 			}
 			if f.Bits >= 16 && !isBitField(f) {
@@ -47,6 +50,7 @@ func GenerateGo(s *Schema, pkg string) string {
 	if needsMath {
 		imports = append(imports, `"math"`)
 	}
+	imports = append(imports, `"time"`)
 
 	if len(imports) > 0 {
 		b.WriteString("import (\n")
@@ -91,17 +95,28 @@ func GenerateGo(s *Schema, pkg string) string {
 	}
 
 	// Group PGNs by number to detect dispatch groups.
+	// Name-only PGNs are tracked separately for registry-only entries.
 	type pgnGroup struct {
 		indices []int
 	}
 	groupOrder := []uint32{}
 	groups := map[uint32]*pgnGroup{}
+	nameOnlyPGNs := map[uint32]*PGNDef{}
 	for i, p := range s.PGNs {
+		if p.IsNameOnly() {
+			nameOnlyPGNs[p.PGN] = &s.PGNs[i]
+			if _, ok := groups[p.PGN]; !ok {
+				groupOrder = append(groupOrder, p.PGN)
+			}
+			continue
+		}
 		g, ok := groups[p.PGN]
 		if !ok {
 			g = &pgnGroup{}
 			groups[p.PGN] = g
-			groupOrder = append(groupOrder, p.PGN)
+			if _, exists := nameOnlyPGNs[p.PGN]; !exists {
+				groupOrder = append(groupOrder, p.PGN)
+			}
 		}
 		g.indices = append(g.indices, i)
 	}
@@ -112,8 +127,11 @@ func GenerateGo(s *Schema, pkg string) string {
 		lookupMap[s.Lookups[i].Name] = &s.Lookups[i]
 	}
 
-	// PGN structs and decode/encode for every variant.
+	// PGN structs and decode/encode for every variant (skip name-only).
 	for _, p := range s.PGNs {
+		if p.IsNameOnly() {
+			continue
+		}
 		writeVariant(&b, p)
 		writeLookupMethods(&b, p, lookupMap)
 	}
@@ -123,7 +141,10 @@ func GenerateGo(s *Schema, pkg string) string {
 	// has a value= constraint (even a single constrained variant needs
 	// dispatch to reject non-matching values).
 	for _, pgn := range groupOrder {
-		g := groups[pgn]
+		g, ok := groups[pgn]
+		if !ok {
+			continue // name-only PGN
+		}
 		if !needsDispatch(s, g.indices) {
 			continue
 		}
@@ -135,6 +156,10 @@ func GenerateGo(s *Schema, pkg string) string {
 	b.WriteString("type PGNInfo struct {\n")
 	b.WriteString("\tPGN         uint32\n")
 	b.WriteString("\tDescription string\n")
+	b.WriteString("\tFastPacket  bool\n")
+	b.WriteString("\tInterval    time.Duration\n")
+	b.WriteString("\tOnDemand    bool\n")
+	b.WriteString("\tDraft       bool\n")
 	b.WriteString("\tDecode      func([]byte) (any, error)\n")
 	b.WriteString("}\n\n")
 	b.WriteString("// Registry maps PGN numbers to their decoders.\n")
@@ -145,13 +170,25 @@ func GenerateGo(s *Schema, pkg string) string {
 			continue
 		}
 		seen[pgn] = true
-		g := groups[pgn]
+
+		g, hasFields := groups[pgn]
+		if !hasFields {
+			// Name-only PGN: registry entry with nil Decode.
+			no := nameOnlyPGNs[pgn]
+			fmt.Fprintf(&b, "\t%d: {PGN: %d, Description: %q, %s},\n",
+				pgn, pgn, no.Description, pgnMetaFields(no))
+			continue
+		}
+
+		// Metadata comes from the first variant (dispatch groups must agree).
+		meta := &s.PGNs[g.indices[0]]
+
 		if !needsDispatch(s, g.indices) {
 			// Plain singleton: use the variant's decoder directly.
 			p := s.PGNs[g.indices[0]]
 			structName := toPascal(p.Description)
-			fmt.Fprintf(&b, "\t%d: {PGN: %d, Description: %q, Decode: func(data []byte) (any, error) { return Decode%s(data) }},\n",
-				p.PGN, p.PGN, p.Description, structName)
+			fmt.Fprintf(&b, "\t%d: {PGN: %d, Description: %q, %sDecode: func(data []byte) (any, error) { return Decode%s(data) }},\n",
+				p.PGN, p.PGN, p.Description, pgnMetaFields(meta), structName)
 		} else {
 			// Dispatch group: use the dispatch function. Pick the default variant's
 			// description, or the first variant if no default exists.
@@ -162,8 +199,8 @@ func GenerateGo(s *Schema, pkg string) string {
 					break
 				}
 			}
-			fmt.Fprintf(&b, "\t%d: {PGN: %d, Description: %q, Decode: Decode%d},\n",
-				pgn, pgn, desc, pgn)
+			fmt.Fprintf(&b, "\t%d: {PGN: %d, Description: %q, %sDecode: Decode%d},\n",
+				pgn, pgn, desc, pgnMetaFields(meta), pgn)
 		}
 	}
 	b.WriteString("}\n")
@@ -185,6 +222,26 @@ func needsDispatch(s *Schema, indices []int) bool {
 		}
 	}
 	return false
+}
+
+// pgnMetaFields returns the Go struct literal fields for PGN metadata.
+// Only emits non-zero fields to keep the generated code clean.
+func pgnMetaFields(p *PGNDef) string {
+	var s string
+	if p.FastPacket {
+		s += "FastPacket: true, "
+	}
+	if p.Interval > 0 {
+		ms := p.Interval.Milliseconds()
+		s += fmt.Sprintf("Interval: %d * time.Millisecond, ", ms)
+	}
+	if p.OnDemand {
+		s += "OnDemand: true, "
+	}
+	if p.Draft {
+		s += "Draft: true, "
+	}
+	return s
 }
 
 // repeatSliceType returns the Go slice type for a repeated field.
@@ -221,7 +278,7 @@ func writeVariant(b *strings.Builder, p PGNDef) {
 	fmt.Fprintf(b, "// %s represents PGN %d — %s.\n", structName, p.PGN, p.Description)
 	fmt.Fprintf(b, "type %s struct {\n", structName)
 	for _, f := range p.Fields {
-		if f.IsReserved() {
+		if f.IsSkipped() {
 			continue
 		}
 		if f.IsRepeated() {
@@ -265,7 +322,7 @@ func writeVariant(b *strings.Builder, p PGNDef) {
 	b.WriteString("\t}\n")
 	fmt.Fprintf(b, "\tvar m %s\n", structName)
 	for _, f := range p.Fields {
-		if f.IsReserved() {
+		if f.IsSkipped() {
 			continue
 		}
 		if f.IsRepeated() {
@@ -284,7 +341,7 @@ func writeVariant(b *strings.Builder, p PGNDef) {
 	fmt.Fprintf(b, "\tdata := make([]byte, %d)\n", minBytes)
 	b.WriteString("\tfor i := range data { data[i] = 0xFF }\n")
 	for _, f := range p.Fields {
-		if f.IsReserved() {
+		if f.IsSkipped() {
 			continue
 		}
 		if f.IsRepeated() {

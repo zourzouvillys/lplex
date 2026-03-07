@@ -1,13 +1,22 @@
 # System & Protocol PGNs
 
+pgn 59392 "ISO Acknowledgement"
+pgn 60160 "ISO Transport Protocol Data Transfer"
+pgn 60416 "ISO Transport Protocol Connection Management"
+pgn 65240 "Commanded Address"
+pgn 126208 "NMEA Request Group Function" fast_packet
+pgn 126464 "PGN List" fast_packet
+pgn 126720 "Proprietary Fast Packet" fast_packet
+pgn 126998 "Configuration Information" fast_packet
+
 # PGN 59904 — ISO Request
 # 3-byte single-frame message requesting transmission of a specific PGN.
-pgn 59904 "ISO Request" {
+pgn 59904 "ISO Request" on_demand {
   requested_pgn  uint32  :24
 }
 
 # PGN 60928 — ISO Address Claim
-pgn 60928 "ISO Address Claim" {
+pgn 60928 "ISO Address Claim" on_demand {
   unique_number      uint32  :21
   manufacturer_code  uint16  :11
   device_instance    uint8   :8
@@ -20,7 +29,7 @@ pgn 60928 "ISO Address Claim" {
 }
 
 # PGN 126996 — Product Information (fast-packet)
-pgn 126996 "Product Information" {
+pgn 126996 "Product Information" fast_packet on_demand {
   nmea_version       uint16  :16
   product_code       uint16  :16
   model_id           string  :256   # 32 bytes
@@ -33,7 +42,7 @@ pgn 126996 "Product Information" {
 
 # PGN 126993 — Heartbeat
 # Confirms a device is still present on the network. Default interval is 60s.
-pgn 126993 "Heartbeat" {
+pgn 126993 "Heartbeat" interval=60000ms {
   data_transmit_offset   uint16  :16  scale=0.001  unit="s"
   sequence_counter       uint8   :8
   controller_1_state     uint8   :2
@@ -83,7 +92,7 @@ lookup VictronRegister uint16 {
   0xEEFF = "Discharge Since Full"
 }
 
-pgn 61184 "Victron Battery Register" {
+pgn 61184 "Victron Battery Register" on_demand {
   manufacturer_code  uint16  :11  value=358
   _                          :2
   industry_code      uint8   :3
@@ -92,7 +101,7 @@ pgn 61184 "Victron Battery Register" {
 }
 
 # PGN 126992 — System Time
-pgn 126992 "System Time" {
+pgn 126992 "System Time" interval=1000ms {
   sid              uint8   :8
   time_source      uint8   :4
   _                         :4

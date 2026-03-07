@@ -1,0 +1,8 @@
+# Alert PGNs (all fast-packet)
+
+pgn 126983 "Alert" fast_packet
+pgn 126984 "Alert Response" fast_packet
+pgn 126985 "Alert Text" fast_packet
+pgn 126986 "Alert Configuration" fast_packet
+pgn 126987 "Alert Threshold" fast_packet
+pgn 126988 "Alert Value" fast_packet

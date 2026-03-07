@@ -1,5 +1,45 @@
 # Navigation PGNs
 
+pgn 127233 "Man Overboard Notification"
+pgn 127237 "Heading Track Control"
+pgn 127245 "Rudder"
+pgn 127252 "Heave"
+pgn 129027 "Position Delta High Precision Rapid Update"
+pgn 129033 "Time and Date"
+pgn 129044 "Datum" fast_packet
+pgn 129045 "User Datum Settings" fast_packet
+pgn 129285 "Navigation Route WP Information" fast_packet
+pgn 129291 "Set and Drift Rapid Update"
+pgn 129301 "Time to from Mark" fast_packet
+pgn 129302 "Bearing and Distance between two Marks" fast_packet
+pgn 129538 "GNSS Control Status" fast_packet
+pgn 129540 "GNSS Satellites in View" fast_packet
+pgn 129541 "GPS Almanac Data" fast_packet
+pgn 129542 "GNSS Pseudorange Noise Statistics" fast_packet
+pgn 129545 "GNSS RAIM Output" fast_packet
+pgn 129547 "GNSS Pseudorange Error Statistics" fast_packet
+pgn 129549 "DGNSS Corrections" fast_packet
+pgn 129551 "GNSS Differential Correction Receiver Signal" fast_packet
+pgn 130052 "Loran-C TD Data" fast_packet
+pgn 130053 "Loran-C Range Data" fast_packet
+pgn 130054 "Loran-C Signal Data" fast_packet
+pgn 130060 "Label" fast_packet
+pgn 130061 "Channel Source Configuration" fast_packet
+pgn 130064 "Route and WP Service Database List" fast_packet
+pgn 130065 "Route and WP Service Route List" fast_packet
+pgn 130066 "Route and WP Service Route WP Name and Position" fast_packet
+pgn 130067 "Route and WP Service Route WP Name" fast_packet
+pgn 130068 "Route and WP Service XTE Limit and Navigation Method" fast_packet
+pgn 130069 "Route and WP Service WP Comment" fast_packet
+pgn 130070 "Route and WP Service Route Comment" fast_packet
+pgn 130071 "Route and WP Service Database Comment" fast_packet
+pgn 130072 "Route and WP Service Radius of Turn" fast_packet
+pgn 130073 "Route and WP Service WP List WP Name and Position" fast_packet
+pgn 130074 "Route and WP Service WP List Database List" fast_packet
+pgn 130323 "Meteorological Station Data" fast_packet
+pgn 130577 "Direction Data" fast_packet
+pgn 130578 "Vessel Speed Components" fast_packet
+
 enum HeadingReference {
   0 = "true"
   1 = "magnetic"
@@ -29,7 +69,7 @@ enum DirectionReference {
 }
 
 # PGN 127250 — Vessel Heading
-pgn 127250 "Vessel Heading" {
+pgn 127250 "Vessel Heading" interval=100ms {
   sid                uint8             :8
   heading            uint16            :16  scale=0.0001 unit="rad"
   deviation          int16             :16  scale=0.0001 unit="rad"
@@ -39,14 +79,14 @@ pgn 127250 "Vessel Heading" {
 }
 
 # PGN 127251 — Rate of Turn
-pgn 127251 "Rate of Turn" {
+pgn 127251 "Rate of Turn" interval=100ms {
   sid         uint8   :8
   rate        int32   :32  scale=3.125e-8  unit="rad/s"
   _                   :24
 }
 
 # PGN 127257 — Attitude
-pgn 127257 "Attitude" {
+pgn 127257 "Attitude" interval=1000ms {
   sid    uint8   :8
   yaw    int16   :16  scale=0.0001 unit="rad"
   pitch  int16   :16  scale=0.0001 unit="rad"
@@ -55,7 +95,7 @@ pgn 127257 "Attitude" {
 }
 
 # PGN 127258 — Magnetic Variation
-pgn 127258 "Magnetic Variation" {
+pgn 127258 "Magnetic Variation" interval=1000ms {
   sid              uint8               :8
   source           HeadingReference    :4
   _                                    :4
@@ -65,7 +105,7 @@ pgn 127258 "Magnetic Variation" {
 }
 
 # PGN 128259 — Speed, Water Referenced
-pgn 128259 "Speed Water Referenced" {
+pgn 128259 "Speed Water Referenced" interval=1000ms {
   sid           uint8      :8
   speed_water   uint16     :16  scale=0.01 unit="m/s"
   speed_ground  uint16     :16  scale=0.01 unit="m/s"
@@ -75,7 +115,7 @@ pgn 128259 "Speed Water Referenced" {
 }
 
 # PGN 128267 — Water Depth
-pgn 128267 "Water Depth" {
+pgn 128267 "Water Depth" interval=1000ms {
   sid          uint8   :8
   depth        uint32  :32  scale=0.01    unit="m"
   offset       int16   :16  scale=0.001   unit="m"
@@ -83,7 +123,7 @@ pgn 128267 "Water Depth" {
 }
 
 # PGN 128275 — Distance Log
-pgn 128275 "Distance Log" {
+pgn 128275 "Distance Log" fast_packet interval=1000ms {
   days_since_1970  uint16  :16
   seconds_today    uint32  :32  scale=0.0001 unit="s"
   log              uint32  :32  scale=1      unit="m"
@@ -91,13 +131,13 @@ pgn 128275 "Distance Log" {
 }
 
 # PGN 129025 — Position, Rapid Update
-pgn 129025 "Position Rapid Update" {
+pgn 129025 "Position Rapid Update" interval=100ms {
   latitude   int32  :32  scale=1e-7 unit="deg"
   longitude  int32  :32  scale=1e-7 unit="deg"
 }
 
 # PGN 129026 — COG & SOG, Rapid Update
-pgn 129026 "COG SOG Rapid Update" {
+pgn 129026 "COG SOG Rapid Update" interval=250ms {
   sid                  uint8               :8
   cog_reference        HeadingReference    :2
   _                                        :6
@@ -107,7 +147,7 @@ pgn 129026 "COG SOG Rapid Update" {
 }
 
 # PGN 129029 — GNSS Position Data (fast-packet)
-pgn 129029 "GNSS Position Data" {
+pgn 129029 "GNSS Position Data" fast_packet interval=1000ms {
   sid              uint8   :8
   days_since_1970  uint16  :16
   seconds_today    uint32  :32  scale=0.0001 unit="s"
@@ -126,7 +166,7 @@ pgn 129029 "GNSS Position Data" {
 }
 
 # PGN 129283 — Cross Track Error
-pgn 129283 "Cross Track Error" {
+pgn 129283 "Cross Track Error" interval=1000ms {
   sid       uint8   :8
   xte_mode  uint8   :4
   _                  :2
@@ -136,7 +176,7 @@ pgn 129283 "Cross Track Error" {
 }
 
 # PGN 129284 — Navigation Data (fast-packet)
-pgn 129284 "Navigation Data" {
+pgn 129284 "Navigation Data" fast_packet interval=1000ms {
   sid                        uint8   :8
   distance_to_wp             uint32  :32  scale=0.01    unit="m"
   bearing_reference          DirectionReference :2
@@ -155,7 +195,7 @@ pgn 129284 "Navigation Data" {
 }
 
 # PGN 129539 — GNSS DOPs
-pgn 129539 "GNSS DOPs" {
+pgn 129539 "GNSS DOPs" interval=1000ms {
   sid            uint8   :8
   desired_mode   uint8   :3
   actual_mode    uint8   :3

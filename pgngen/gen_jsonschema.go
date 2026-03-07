@@ -30,14 +30,17 @@ func GenerateJSONSchema(s *Schema) string {
 		}
 	}
 
-	// PGN definitions
+	// PGN definitions (skip name-only PGNs)
 	for _, p := range s.PGNs {
+		if p.IsNameOnly() {
+			continue
+		}
 		name := toPascal(p.Description)
 		props := map[string]any{}
 		required := []string{}
 
 		for _, f := range p.Fields {
-			if f.IsReserved() {
+			if f.IsSkipped() {
 				continue
 			}
 

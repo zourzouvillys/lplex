@@ -1,102 +1,17 @@
 package lplex
 
-import "time"
+import (
+	"time"
 
-// fastPacketPGNs lists PGNs that use fast-packet transfer (multi-frame).
-// Comprehensive list from canboat database.
-var fastPacketPGNs = map[uint32]bool{
-	// Navigation
-	126208: true, // NMEA Request/Command/Acknowledge Group Function
-	126464: true, // PGN List (Transmit and Receive)
-	126720: true, // Proprietary fast-packet
-	126983: true, // Alert
-	126984: true, // Alert Response
-	126985: true, // Alert Text
-	126986: true, // Alert Configuration
-	126987: true, // Alert Threshold
-	126988: true, // Alert Value
-	126996: true, // Product Information
-	126998: true, // Configuration Information
-
-	// GNSS
-	129029: true, // GNSS Position Data
-	129038: true, // AIS Class A Position Report
-	129039: true, // AIS Class B Position Report
-	129040: true, // AIS Class B Extended Position Report
-	129041: true, // AIS Aids to Navigation (AtoN) Report
-	129044: true, // Datum
-	129045: true, // User Datum Settings
-	129284: true, // Navigation Route/WP Information
-	129285: true, // Navigation Route - WP Name & Position
-	129301: true, // Time to/from Mark
-	129302: true, // Bearing and Distance between two Marks
-	129538: true, // GNSS Control Status
-	129540: true, // GNSS Sats in View
-	129541: true, // GPS Almanac Data
-	129542: true, // GNSS Pseudorange Noise Statistics
-	129545: true, // GNSS RAIM Output
-	129547: true, // GNSS Pseudorange Error Statistics
-	129549: true, // DGNSS Corrections
-	129551: true, // GNSS Differential Correction Receiver Signal
-
-	// AIS
-	129792: true, // AIS DGNSS Broadcast Binary Message
-	129793: true, // AIS UTC and Date Report
-	129794: true, // AIS Class A Static and Voyage Related Data
-	129795: true, // AIS Addressed Binary Message
-	129796: true, // AIS Acknowledge
-	129797: true, // AIS Binary Broadcast Message
-	129798: true, // AIS SAR Aircraft Position Report
-	129799: true, // Radio Frequency/Mode/Power
-	129800: true, // AIS UTC/Date Inquiry
-	129801: true, // AIS Addressed Safety Related Message
-	129802: true, // AIS Safety Related Broadcast Message
-	129803: true, // AIS Interrogation
-	129804: true, // AIS Assignment Mode Command
-	129805: true, // AIS Data Link Management Message
-	129806: true, // AIS Channel Management
-	129807: true, // AIS Group Assignment
-	129808: true, // DSC Call Information
-	129809: true, // AIS Class B CS Static Data Report, Part A
-	129810: true, // AIS Class B CS Static Data Report, Part B
-
-	// Meteorological
-	130052: true, // Loran-C TD Data
-	130053: true, // Loran-C Range Data
-	130054: true, // Loran-C Signal Data
-	130060: true, // Label
-	130061: true, // Channel Source Configuration
-	130064: true, // Route and WP Service - Database List
-	130065: true, // Route and WP Service - Route List
-	130066: true, // Route and WP Service - Route/WP-Name & Position
-	130067: true, // Route and WP Service - Route/WP-Name
-	130068: true, // Route and WP Service - XTE Limit & Navigation Method
-	130069: true, // Route and WP Service - WP Comment
-	130070: true, // Route and WP Service - Route Comment
-	130071: true, // Route and WP Service - Database Comment
-	130072: true, // Route and WP Service - Radius of Turn
-	130073: true, // Route and WP Service - WP List - WP Name & Position
-	130074: true, // Route and WP Service - WP List - Database List
-
-	// Engine & Electrical
-	127489: true, // Engine Parameters, Dynamic
-	127506: true, // DC Detailed Status
-	127509: true, // Inverter Status
-	127513: true, // Battery Configuration Status
-
-	// Distance
-	128275: true, // Distance Log
-
-	// Environment
-	130323: true, // Meteorological Station Data
-	130567: true, // Watermaker Input Setting and Status
-	130577: true, // Direction Data (fast)
-	130578: true, // Vessel Speed Components
-}
+	"github.com/sixfathoms/lplex/pgn"
+)
 
 // IsFastPacket returns true if the PGN uses fast-packet transfer.
-func IsFastPacket(pgn uint32) bool {
-	return fastPacketPGNs[pgn]
+func IsFastPacket(pgnNum uint32) bool {
+	if info, ok := pgn.Registry[pgnNum]; ok {
+		return info.FastPacket
+	}
+	return false
 }
 
 // reassemblyKey uniquely identifies a fast-packet transfer in progress.

@@ -35,14 +35,17 @@ func GenerateProto(s *Schema, pkg string) string {
 		b.WriteString("}\n\n")
 	}
 
-	// Messages
+	// Messages (skip name-only PGNs)
 	for _, p := range s.PGNs {
+		if p.IsNameOnly() {
+			continue
+		}
 		msgName := toPascal(p.Description)
 		fmt.Fprintf(&b, "// PGN %d — %s\n", p.PGN, p.Description)
 		fmt.Fprintf(&b, "message %s {\n", msgName)
 		fieldNum := 1
 		for _, f := range p.Fields {
-			if f.IsReserved() {
+			if f.IsSkipped() {
 				continue
 			}
 			protoType := protoFieldType(f)
@@ -70,13 +73,16 @@ func GenerateProto(s *Schema, pkg string) string {
 		b.WriteString("}\n\n")
 	}
 
-	// Wrapper message for any PGN
+	// Wrapper message for any PGN (skip name-only)
 	b.WriteString("// DecodedPGN wraps any decoded PGN message.\n")
 	b.WriteString("message DecodedPGN {\n")
 	b.WriteString("  uint32 pgn = 1;\n")
 	b.WriteString("  oneof message {\n")
 	fieldNum := 2
 	for _, p := range s.PGNs {
+		if p.IsNameOnly() {
+			continue
+		}
 		msgName := toPascal(p.Description)
 		fieldName := toSnake(p.Description)
 		fmt.Fprintf(&b, "    %s %s = %d;\n", msgName, fieldName, fieldNum)

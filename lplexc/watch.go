@@ -35,6 +35,9 @@ func (c *Client) Watch(ctx context.Context, pgnNumber uint32) (<-chan WatchValue
 	if !ok {
 		return nil, fmt.Errorf("PGN %d is not in the decoder registry", pgnNumber)
 	}
+	if info.Decode == nil {
+		return nil, fmt.Errorf("PGN %d (%s) has no decoder (name-only definition)", pgnNumber, info.Description)
+	}
 
 	ch := make(chan WatchValue, 64)
 	go c.watchLoop(ctx, pgnNumber, info, ch)

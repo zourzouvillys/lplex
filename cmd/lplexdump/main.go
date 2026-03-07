@@ -818,7 +818,10 @@ func formatFrame(w *bufio.Writer, f *lplexc.Frame, dm *deviceMap, decode bool) {
 		srcLabel = fmt.Sprintf("%s(%d)[%d]", d.Manufacturer, d.ManufacturerCode, f.Src)
 	}
 
-	pgnName := pgnNames[f.PGN]
+	var pgnName string
+	if info, ok := pgn.Registry[f.PGN]; ok {
+		pgnName = info.Description
+	}
 	sc := colorForSrc(f.Src)
 
 	fmt.Fprintf(w, "%s%s%s %s#%-7d%s %s%-20s%s %s>%02x%s  %s%s%-6d%s",
@@ -866,7 +869,7 @@ func formatFrame(w *bufio.Writer, f *lplexc.Frame, dm *deviceMap, decode bool) {
 // decodeFrame attempts to decode a frame's hex data using the pgn.Registry.
 func decodeFrame(f *lplexc.Frame) (any, error) {
 	info, ok := pgn.Registry[f.PGN]
-	if !ok {
+	if !ok || info.Decode == nil {
 		return nil, nil
 	}
 	data, err := hex.DecodeString(f.Data)
@@ -1126,108 +1129,6 @@ func isTerminal(f *os.File) bool {
 		return false
 	}
 	return fi.Mode()&os.ModeCharDevice != 0
-}
-
-// ---------------------------------------------------------------------------
-// NMEA 2000 PGN names (common subset)
-// ---------------------------------------------------------------------------
-
-var pgnNames = map[uint32]string{
-	59392:  "ISO Ack",
-	59904:  "ISO Request",
-	60160:  "ISO Transport Proto",
-	60416:  "ISO Transport Proto",
-	60928:  "ISO Address Claim",
-	65240:  "Commanded Address",
-	126208: "NMEA Req/Cmd/Ack",
-	126464: "PGN List",
-	126720: "Proprietary",
-	126983: "Alert",
-	126984: "Alert Response",
-	126985: "Alert Text",
-	126986: "Alert Config",
-	126987: "Alert Threshold",
-	126988: "Alert Value",
-	126992: "System Time",
-	126993: "Heartbeat",
-	126996: "Product Info",
-	126998: "Config Info",
-	127233: "Man Overboard",
-	127237: "Heading/Track Ctrl",
-	127245: "Rudder",
-	127250: "Vessel Heading",
-	127251: "Rate of Turn",
-	127252: "Heave",
-	127257: "Attitude",
-	127258: "Magnetic Variation",
-	127488: "Engine Rapid",
-	127489: "Engine Dynamic",
-	127493: "Transmission",
-	127497: "Trip Engine",
-	127498: "Engine Param Static",
-	127501: "Binary Switch Bank",
-	127505: "Fluid Level",
-	127506: "DC Status",
-	127507: "Charger Status",
-	127508: "Battery Status",
-	127509: "Inverter Status",
-	127510: "AC Status",
-	128259: "Speed, Water",
-	128267: "Water Depth",
-	128275: "Distance Log",
-	129025: "Position Rapid",
-	129026: "COG/SOG Rapid",
-	129027: "Position Delta Rapid",
-	129029: "GNSS Position",
-	129033: "Time & Date",
-	129038: "AIS Class A",
-	129039: "AIS Class B",
-	129040: "AIS Class B Ext",
-	129041: "AIS Aids Nav",
-	129044: "Datum",
-	129283: "Cross Track Error",
-	129284: "Navigation Data",
-	129285: "Route/WP Info",
-	129291: "Set & Drift Rapid",
-	129539: "GNSS DOPs",
-	129540: "GNSS Sats in View",
-	129542: "GNSS Range Residuals",
-	129794: "AIS Static Data A",
-	129795: "AIS Addressed Msg",
-	129796: "AIS Ack",
-	129797: "AIS Binary Broadcast",
-	129798: "AIS SAR Position",
-	129799: "Radio Freq/Mode",
-	129800: "AIS UTC/Date Inquiry",
-	129801: "AIS Addressed Safe",
-	129802: "AIS Broadcast Safe",
-	129809: "AIS Static Data B",
-	129810: "AIS Static Data B",
-	130060: "Label",
-	130061: "Channel Source",
-	130064: "Route Leg/WP",
-	130065: "Route/WP Filter",
-	130066: "Route/WP Time",
-	130067: "Route/WP Plan",
-	130069: "Waypoint List",
-	130070: "Waypoint",
-	130074: "Route/WP Time to From",
-	130306: "Wind Data",
-	130310: "Env Parameters",
-	130311: "Env Parameters",
-	130312: "Temperature",
-	130313: "Humidity",
-	130314: "Actual Pressure",
-	130316: "Temp Extended",
-	130560: "Payload Mass",
-	130567: "Watermaker Input",
-	130569: "Current Status/Ctrl",
-	130570: "AC Input Status",
-	130571: "AC Output Status",
-	130572: "AC Input Config",
-	130573: "AC Output Config",
-	130577: "Direction Data",
-	130578: "Vessel Speed",
 }
 
 // ---------------------------------------------------------------------------

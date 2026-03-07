@@ -5,6 +5,8 @@
 // decoders/encoders, Protocol Buffer definitions, and JSON Schema.
 package pgngen
 
+import "time"
+
 // Schema is the top-level AST node containing all parsed definitions.
 type Schema struct {
 	Enums   []EnumDef
@@ -42,11 +44,25 @@ type LookupValue struct {
 }
 
 // PGNDef defines a single PGN packet layout.
+//
+// Fields semantics:
+//   - nil:   name-only PGN (we know it exists but not its field layout)
+//   - []:    PGN with zero user-visible fields (only reserved/unknown bits)
+//   - [...]: PGN with a full field definition
 type PGNDef struct {
 	PGN         uint32
 	Description string
+	FastPacket  bool
+	Interval    time.Duration // 0 = unspecified
+	OnDemand    bool
+	Draft       bool // definition is incomplete or uncertain
 	Fields      []FieldDef
 	Line        int // source line for error reporting
+}
+
+// IsNameOnly returns true if the PGN has no field layout defined.
+func (p *PGNDef) IsNameOnly() bool {
+	return p.Fields == nil
 }
 
 // TotalBits returns the total number of bits across all fields.
@@ -91,7 +107,18 @@ type FieldDef struct {
 
 // IsReserved returns true if this is a padding/reserved field.
 func (f *FieldDef) IsReserved() bool {
-	return f.Name == "" || f.Name == "_"
+	return f.Type == TypeReserved
+}
+
+// IsUnknown returns true if this is an unknown data field.
+func (f *FieldDef) IsUnknown() bool {
+	return f.Type == TypeUnknown
+}
+
+// IsSkipped returns true if this field should be excluded from generated structs.
+// Both reserved padding and unknown data fields are skipped.
+func (f *FieldDef) IsSkipped() bool {
+	return f.IsReserved() || f.IsUnknown()
 }
 
 // IsRepeated returns true if this field uses the repeat= attribute.
@@ -114,6 +141,7 @@ const (
 	TypeString                    // fixed-length ASCII string
 	TypeEnum                      // lookup enum (references an EnumDef)
 	TypeReserved                  // reserved/padding bits
+	TypeUnknown                   // unknown data (observed but undocumented)
 )
 
 // Resolve computes BitStart offsets for all fields in all PGNs and validates
@@ -141,6 +169,9 @@ func (s *Schema) Resolve() error {
 	}
 
 	for i := range s.PGNs {
+		if s.PGNs[i].IsNameOnly() {
+			continue
+		}
 		offset := 0
 		for j := range s.PGNs[i].Fields {
 			s.PGNs[i].Fields[j].BitStart = offset
@@ -166,8 +197,12 @@ func (s *Schema) Resolve() error {
 	}
 
 	// Validate dispatch groups: PGNs sharing the same number.
+	// Name-only PGNs are excluded from dispatch groups.
 	groups := make(map[uint32][]int) // PGN number -> indices into s.PGNs
 	for i, p := range s.PGNs {
+		if p.IsNameOnly() {
+			continue
+		}
 		groups[p.PGN] = append(groups[p.PGN], i)
 	}
 	for pgn, indices := range groups {
@@ -249,6 +284,30 @@ func validateDispatchGroup(s *Schema, pgn uint32, indices []int) error {
 			}
 		}
 		matchValues[*d.MatchValue] = idx
+	}
+
+	// Validate all variants agree on PGN-level metadata.
+	first := &s.PGNs[indices[0]]
+	for _, idx := range indices[1:] {
+		p := &s.PGNs[idx]
+		if p.FastPacket != first.FastPacket {
+			return &ResolveError{
+				Line:    p.Line,
+				Message: "PGN " + pgnStr + ": conflicting fast_packet metadata across variants",
+			}
+		}
+		if p.Interval != first.Interval {
+			return &ResolveError{
+				Line:    p.Line,
+				Message: "PGN " + pgnStr + ": conflicting interval metadata across variants",
+			}
+		}
+		if p.OnDemand != first.OnDemand {
+			return &ResolveError{
+				Line:    p.Line,
+				Message: "PGN " + pgnStr + ": conflicting on_demand metadata across variants",
+			}
+		}
 	}
 
 	return nil

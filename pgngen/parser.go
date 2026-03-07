@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -165,9 +166,9 @@ func (p *parser) parseLookup(tokens []string) (LookupDef, error) {
 }
 
 func (p *parser) parsePGN(tokens []string) (PGNDef, error) {
-	// pgn <number> "<description>" {
-	if len(tokens) < 4 || tokens[3] != "{" {
-		return PGNDef{}, p.errorf("expected: pgn <number> \"<description>\" {")
+	// pgn <number> "<description>" [attrs...] [{]
+	if len(tokens) < 3 {
+		return PGNDef{}, p.errorf("expected: pgn <number> \"<description>\" [attrs...] [{]")
 	}
 	pgn, err := strconv.ParseUint(tokens[1], 10, 32)
 	if err != nil {
@@ -175,6 +176,47 @@ func (p *parser) parsePGN(tokens []string) (PGNDef, error) {
 	}
 	desc := unquote(tokens[2])
 	d := PGNDef{PGN: uint32(pgn), Description: desc, Line: p.lineNum()}
+
+	hasBrace := tokens[len(tokens)-1] == "{"
+
+	// Parse PGN-level attributes between the description and opening brace (or end of line).
+	attrEnd := len(tokens)
+	if hasBrace {
+		attrEnd = len(tokens) - 1
+	}
+	for _, attr := range tokens[3:attrEnd] {
+		switch attr {
+		case "fast_packet":
+			d.FastPacket = true
+		case "on_demand":
+			d.OnDemand = true
+		case "draft":
+			d.Draft = true
+		default:
+			k, v, ok := splitAttr(attr)
+			if !ok {
+				return PGNDef{}, p.errorf("unknown PGN attribute %q", attr)
+			}
+			switch k {
+			case "interval":
+				d.Interval, err = parseDuration(v)
+				if err != nil {
+					return PGNDef{}, p.errorf("invalid interval %q: %v", v, err)
+				}
+			default:
+				return PGNDef{}, p.errorf("unknown PGN attribute %q", k)
+			}
+		}
+	}
+
+	// No brace: name-only PGN (Fields stays nil).
+	if !hasBrace {
+		p.pos++
+		return d, nil
+	}
+
+	// Has brace: parse fields. Initialize to empty slice (distinct from nil).
+	d.Fields = []FieldDef{}
 	p.pos++
 	for p.pos < len(p.lines) {
 		line := p.stripComment(p.lines[p.pos])
@@ -184,6 +226,9 @@ func (p *parser) parsePGN(tokens []string) (PGNDef, error) {
 			continue
 		}
 		if toks[0] == "}" {
+			if len(d.Fields) == 0 {
+				return PGNDef{}, p.errorf("empty PGN body; use brace-less form for name-only PGNs")
+			}
 			p.pos++
 			return d, nil
 		}
@@ -211,9 +256,12 @@ func (p *parser) parseField(tokens []string) (FieldDef, error) {
 	f.Name = tokens[idx]
 	idx++
 
-	// Type (optional for "_" reserved fields)
+	// Type (optional for "_" reserved and "?" unknown fields)
 	if f.Name == "_" {
 		f.Type = TypeReserved
+		// Next token should be :<bits>
+	} else if f.Name == "?" {
+		f.Type = TypeUnknown
 		// Next token should be :<bits>
 	} else {
 		if idx >= len(tokens) {
@@ -263,8 +311,8 @@ func (p *parser) parseField(tokens []string) (FieldDef, error) {
 		case "desc":
 			f.Desc = unquote(v)
 		case "value":
-			if f.IsReserved() {
-				return FieldDef{}, p.errorf("reserved field cannot have value= attribute")
+			if f.IsSkipped() {
+				return FieldDef{}, p.errorf("reserved/unknown field cannot have value= attribute")
 			}
 			val, err := strconv.ParseInt(v, 10, 64)
 			if err != nil {
@@ -272,13 +320,13 @@ func (p *parser) parseField(tokens []string) (FieldDef, error) {
 			}
 			f.MatchValue = &val
 		case "lookup":
-			if f.IsReserved() {
-				return FieldDef{}, p.errorf("reserved field cannot have lookup= attribute")
+			if f.IsSkipped() {
+				return FieldDef{}, p.errorf("reserved/unknown field cannot have lookup= attribute")
 			}
 			f.LookupRef = unquote(v)
 		case "repeat":
-			if f.IsReserved() {
-				return FieldDef{}, p.errorf("reserved field cannot have repeat= attribute")
+			if f.IsSkipped() {
+				return FieldDef{}, p.errorf("reserved/unknown field cannot have repeat= attribute")
 			}
 			n, err := strconv.Atoi(v)
 			if err != nil || n < 2 {
@@ -411,4 +459,29 @@ func unquote(s string) string {
 		return s[1 : len(s)-1]
 	}
 	return s
+}
+
+// parseDuration parses a duration string with "ms" or "s" suffix.
+func parseDuration(s string) (time.Duration, error) {
+	if strings.HasSuffix(s, "ms") {
+		n, err := strconv.ParseInt(s[:len(s)-2], 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid millisecond value: %s", s)
+		}
+		if n <= 0 {
+			return 0, fmt.Errorf("duration must be positive: %s", s)
+		}
+		return time.Duration(n) * time.Millisecond, nil
+	}
+	if strings.HasSuffix(s, "s") {
+		n, err := strconv.ParseInt(s[:len(s)-1], 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid second value: %s", s)
+		}
+		if n <= 0 {
+			return 0, fmt.Errorf("duration must be positive: %s", s)
+		}
+		return time.Duration(n) * time.Second, nil
+	}
+	return 0, fmt.Errorf("unsupported duration suffix (use ms or s): %s", s)
 }
