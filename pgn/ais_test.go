@@ -195,9 +195,8 @@ func TestAISAidsToNavigationReportDecode(t *testing.T) {
 	if m.AtonType != 19 {
 		t.Errorf("aton_type = %d, want 19", m.AtonType)
 	}
-	// decodeFixedStr preserves trailing spaces; AIS names are space-padded
-	if m.AtonName != "SB                  " {
-		t.Errorf("aton_name = %q, want %q", m.AtonName, "SB                  ")
+	if m.AtonName != "SB" {
+		t.Errorf("aton_name = %q, want %q", m.AtonName, "SB")
 	}
 }
 
@@ -253,9 +252,7 @@ func TestAISClassBStaticDataPartADecode(t *testing.T) {
 	if m.UserId != 367645940 {
 		t.Errorf("user_id = %d, want 367645940", m.UserId)
 	}
-	// Name should be "ALICE MARIE" - but decodeFixedStr stops at 0x00/0xFF
-	// The '@' (0x40) padding chars will remain in the string
-	want := "ALICE MARIE@@@@@@@@@"
+	want := "ALICE MARIE"
 	if m.Name != want {
 		t.Errorf("name = %q, want %q", m.Name, want)
 	}

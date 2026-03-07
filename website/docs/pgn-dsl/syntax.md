@@ -173,7 +173,7 @@ Integer fields can use fewer bits than their type's natural width. A `uint8 :4` 
 model_id  string  :256   # 32 bytes (256 bits)
 ```
 
-Strings are fixed-width, measured in bits (always a multiple of 8). Trailing 0xFF padding and null bytes are stripped.
+Strings are fixed-width, measured in bits (always a multiple of 8). Trailing 0xFF padding and null bytes are stripped. Use `trim="..."` to also right-trim specific characters (e.g. `trim="@ "` for AIS names that use `@` and space padding).
 
 ### Enum types
 
@@ -202,6 +202,7 @@ These are per-field attributes (placed after the `:bits` specifier). For PGN-lev
 | `scale=N` | float | Multiply raw integer by this factor. Changes Go field to `float64`. |
 | `offset=N` | float | Add to scaled value: `decoded = raw * scale + offset`. |
 | `unit="..."` | string | Unit annotation (informational, included in generated comments) |
+| `trim="..."` | string | Right-trim these characters from decoded string (e.g. `"@ "` for AIS padding). Only valid on `string` fields. |
 | `value=N` | integer | Fixed value for dispatch. Field must equal this value for the PGN to match. |
 | `lookup=Name` | identifier | Attach a lookup table for `Name()` method |
 | `repeat=N` | integer | Generate a slice of N elements (see [Repeated Fields](/pgn-dsl/repeated-fields)) |

@@ -583,6 +583,7 @@ Each field has: `name  type  :bits  [attributes...]`
 | `scale=N` | Scaling factor: `decoded = raw * scale`. Output type becomes `float64`. |
 | `offset=N` | Offset: `decoded = raw * scale + offset` |
 | `unit="..."` | Human-readable unit (e.g. `"deg"`, `"m/s"`, `"rad"`) |
+| `trim="..."` | Right-trim these characters from decoded string fields (e.g. `trim="@ "` for AIS names) |
 | `value=N` | Dispatch constraint for variant PGNs (see below) |
 
 ### Enums

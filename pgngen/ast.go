@@ -97,6 +97,7 @@ type FieldDef struct {
 	Desc        string    // optional description
 	EnumRef     string    // enum type name (non-empty when Type == TypeEnum)
 	LookupRef   string    // lookup table name (non-empty when lookup= is set)
+	Trim        string    // characters to right-trim from decoded string (e.g. "@ ")
 	Signed      bool      // true for int types
 	MatchValue  *int64    // when set, this field must equal this value (dispatch discriminator)
 	RepeatCount int       // number of repetitions (0 = not repeated, must be >= 2 when set)
