@@ -113,13 +113,13 @@ func (m VictronBatteryRegister) LookupFields() map[string]string {
 
 ```
 pgn 61184 "Victron Battery Register" {
-  register_id  uint16  :16  lookup=VictronRegister
+  register  uint16  :16  lookup=VictronRegister
 }
 ```
 
 The Go struct field stays `uint16` (no new type), but gains a `RegisterName() string` helper method and a `LookupFields()` method for display code.
 
-If the DSL field name ends in `_id`, the suffix is stripped in the generated Go name and JSON tag (e.g. `register_id` becomes `Register`/`"register"`) since display code wraps lookup fields as `{"id": <raw>, "name": "..."}` objects.
+Display tools like `lplexdump` use `LookupFields()` to wrap lookup fields as `{"id": <raw>, "name": "..."}` objects in JSON output. Unknown values omit the `name` field.
 
 ### When to use lookups
 

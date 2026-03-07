@@ -605,52 +605,6 @@ pgn 99999 "Test Device" {
 	}
 }
 
-func TestGenerateGoLookupIdSuffix(t *testing.T) {
-	// Fields ending in _id with a lookup= should have the suffix stripped
-	// in the generated Go name and JSON tag.
-	src := `
-lookup RegNames uint16 {
-  0x01 = "Voltage"
-}
-
-pgn 99999 "Test Device" {
-  register_id  uint16  :16  lookup=RegNames
-}
-`
-	s, err := Parse(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Resolve(); err != nil {
-		t.Fatal(err)
-	}
-
-	code := GenerateGo(s, "pgn")
-
-	// Go struct field should be "Register", not "RegisterId".
-	if !strings.Contains(code, "Register uint16") {
-		t.Error("expected Go field 'Register', not 'RegisterId'")
-	}
-	if strings.Contains(code, "RegisterId uint16") {
-		t.Error("Go field should strip _id suffix for lookup fields")
-	}
-
-	// JSON tag should be "register", not "register_id".
-	if !strings.Contains(code, `json:"register"`) {
-		t.Error("expected JSON tag 'register', not 'register_id'")
-	}
-
-	// Method should be RegisterName, not RegisterIdName.
-	if !strings.Contains(code, "func (m TestDevice) RegisterName() string {") {
-		t.Error("expected RegisterName method, not RegisterIdName")
-	}
-
-	// LookupFields key should use the stripped name.
-	if !strings.Contains(code, `"register": regNamesNames[m.Register]`) {
-		t.Error("LookupFields key should be 'register', not 'register_id'")
-	}
-}
-
 func TestGenerateGoLookupNoRef(t *testing.T) {
 	src := `
 lookup OrphanLookup uint16 {

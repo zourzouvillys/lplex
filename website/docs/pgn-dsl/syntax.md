@@ -189,10 +189,10 @@ wind_reference  WindReference  :3
 Use a previously defined lookup name as the type:
 
 ```
-register_id  uint16  :16  lookup=VictronRegister
+register  uint16  :16  lookup=VictronRegister
 ```
 
-The `lookup=` attribute adds a `Name()` method without changing the underlying type. If the field name ends in `_id`, the suffix is stripped in the generated Go name and JSON tag (the display layer wraps lookup fields as `{"id": <raw>, "name": "..."}` objects).
+The `lookup=` attribute adds a `Name()` method and a `LookupFields()` method without changing the underlying type. Display tools wrap lookup fields as `{"id": <raw>, "name": "..."}` objects in JSON output.
 
 ## Field attributes
 

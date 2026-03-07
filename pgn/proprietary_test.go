@@ -23,7 +23,7 @@ func TestDecodeVictronSOC(t *testing.T) {
 		t.Errorf("IndustryCode = %d, want 4", m.IndustryCode)
 	}
 	if m.Register != 0x0FFF {
-		t.Errorf("RegisterId = 0x%04X, want 0x0FFF", m.Register)
+		t.Errorf("Register = 0x%04X, want 0x0FFF", m.Register)
 	}
 	if m.RegisterName() != "State of Charge" {
 		t.Errorf("RegisterName() = %q, want %q", m.RegisterName(), "State of Charge")
@@ -45,7 +45,7 @@ func TestDecodeVictronCurrent(t *testing.T) {
 		t.Fatalf("expected VictronBatteryRegister, got %T", result)
 	}
 	if m.Register != 0xED8F {
-		t.Errorf("RegisterId = 0x%04X, want 0xED8F", m.Register)
+		t.Errorf("Register = 0x%04X, want 0xED8F", m.Register)
 	}
 	if m.RegisterName() != "DC Channel 1 Current" {
 		t.Errorf("RegisterName() = %q, want %q", m.RegisterName(), "DC Channel 1 Current")
@@ -67,7 +67,7 @@ func TestDecodeVictronDeviceMode(t *testing.T) {
 		t.Fatalf("expected VictronBatteryRegister, got %T", result)
 	}
 	if m.Register != 0x0200 {
-		t.Errorf("RegisterId = 0x%04X, want 0x0200", m.Register)
+		t.Errorf("Register = 0x%04X, want 0x0200", m.Register)
 	}
 	if m.RegisterName() != "Device Mode" {
 		t.Errorf("RegisterName() = %q, want %q", m.RegisterName(), "Device Mode")
@@ -89,7 +89,7 @@ func TestDecodeVictronDischargeSinceFull(t *testing.T) {
 		t.Fatalf("expected VictronBatteryRegister, got %T", result)
 	}
 	if m.Register != 0xEEFF {
-		t.Errorf("RegisterId = 0x%04X, want 0xEEFF", m.Register)
+		t.Errorf("Register = 0x%04X, want 0xEEFF", m.Register)
 	}
 	if m.RegisterName() != "Discharge Since Full" {
 		t.Errorf("RegisterName() = %q, want %q", m.RegisterName(), "Discharge Since Full")
@@ -108,7 +108,7 @@ func TestDecodeVictronUnknownRegister(t *testing.T) {
 		t.Fatalf("expected VictronBatteryRegister, got %T", result)
 	}
 	if m.Register != 0x0301 {
-		t.Errorf("RegisterId = 0x%04X, want 0x0301", m.Register)
+		t.Errorf("Register = 0x%04X, want 0x0301", m.Register)
 	}
 	if m.RegisterName() != "" {
 		t.Errorf("RegisterName() = %q, want empty", m.RegisterName())
@@ -159,7 +159,7 @@ func TestVictronBatteryRegisterEncode(t *testing.T) {
 		t.Errorf("ManufacturerCode = %d, want 358", got.ManufacturerCode)
 	}
 	if got.Register != 0x0FFF {
-		t.Errorf("RegisterId = 0x%04X, want 0x0FFF", got.Register)
+		t.Errorf("Register = 0x%04X, want 0x0FFF", got.Register)
 	}
 	if got.Payload != 10000 {
 		t.Errorf("Payload = %d, want 10000", got.Payload)
@@ -216,7 +216,7 @@ func TestVictronDecodeShortData(t *testing.T) {
 	}
 	// Padded with 0xFF: register_id = 0xFFFF, payload = 0xFFFFFFFF.
 	if m.Register != 0xFFFF {
-		t.Errorf("RegisterId = 0x%04X, want 0xFFFF (padded)", m.Register)
+		t.Errorf("Register = 0x%04X, want 0xFFFF (padded)", m.Register)
 	}
 	if m.Payload != 0xFFFFFFFF {
 		t.Errorf("Payload = 0x%08X, want 0xFFFFFFFF (padded)", m.Payload)
@@ -234,7 +234,7 @@ func TestVictronDecodeEmpty(t *testing.T) {
 		t.Errorf("ManufacturerCode = %d, want %d (all-ones)", m.ManufacturerCode, 0x07FF)
 	}
 	if m.Register != 0xFFFF {
-		t.Errorf("RegisterId = 0x%04X, want 0xFFFF", m.Register)
+		t.Errorf("Register = 0x%04X, want 0xFFFF", m.Register)
 	}
 	if m.Payload != 0xFFFFFFFF {
 		t.Errorf("Payload = 0x%08X, want 0xFFFFFFFF", m.Payload)

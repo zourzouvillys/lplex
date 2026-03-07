@@ -256,7 +256,7 @@ func pgnMetaFields(p *PGNDef) string {
 	var tols []string
 	for _, f := range p.Fields {
 		if f.Tolerance != nil {
-			tols = append(tols, fmt.Sprintf("%q: %g", toSnake(fieldOutputName(f)), *f.Tolerance))
+			tols = append(tols, fmt.Sprintf("%q: %g", toSnake(f.Name), *f.Tolerance))
 		}
 	}
 	if len(tols) > 0 {
@@ -271,16 +271,6 @@ func pgnMetaFields(p *PGNDef) string {
 	}
 
 	return s
-}
-
-// fieldOutputName returns the canonical name for a field in generated output.
-// For lookup fields whose DSL name ends in "_id", the suffix is stripped because
-// the JSON output already wraps the value as {"id": ..., "name": ...}.
-func fieldOutputName(f FieldDef) string {
-	if f.LookupRef != "" && strings.HasSuffix(f.Name, "_id") {
-		return strings.TrimSuffix(f.Name, "_id")
-	}
-	return f.Name
 }
 
 // repeatSliceType returns the Go slice type for a repeated field.
@@ -338,13 +328,12 @@ func writeVariant(b *strings.Builder, p PGNDef) {
 			continue
 		}
 		goType := goFieldType(f)
-		outName := fieldOutputName(f)
-		tag := fmt.Sprintf("`json:%q`", toSnake(outName))
+		tag := fmt.Sprintf("`json:%q`", toSnake(f.Name))
 		comment := ""
 		if f.Unit != "" {
 			comment = " // " + f.Unit
 		}
-		fmt.Fprintf(b, "\t%s %s %s%s\n", toPascal(outName), goType, tag, comment)
+		fmt.Fprintf(b, "\t%s %s %s%s\n", toPascal(f.Name), goType, tag, comment)
 	}
 	b.WriteString("}\n\n")
 
@@ -369,7 +358,7 @@ func writeVariant(b *strings.Builder, p PGNDef) {
 			writeDecodeRepeated(b, f)
 			continue
 		}
-		goField := toPascal(fieldOutputName(f))
+		goField := toPascal(f.Name)
 		writeDecodeField(b, f, goField)
 	}
 	b.WriteString("\treturn m, nil\n")
@@ -391,7 +380,7 @@ func writeVariant(b *strings.Builder, p PGNDef) {
 		if f.MatchValue != nil {
 			writeEncodeConstrained(b, f, *f.MatchValue)
 		} else {
-			goField := toPascal(fieldOutputName(f))
+			goField := toPascal(f.Name)
 			writeEncodeField(b, f, goField)
 		}
 	}
@@ -411,11 +400,10 @@ func writeLookupMethods(b *strings.Builder, p PGNDef, lookupMap map[string]*Look
 			continue
 		}
 		varName := toLowerCamel(l.Name) + "Names"
-		outName := fieldOutputName(f)
-		methodName := toPascal(outName) + "Name"
+		methodName := toPascal(f.Name) + "Name"
 		fmt.Fprintf(b, "// %s returns the human-readable name for this field's value, or empty if unknown.\n", methodName)
 		fmt.Fprintf(b, "func (m %s) %s() string {\n", structName, methodName)
-		fmt.Fprintf(b, "\treturn %s[m.%s]\n", varName, toPascal(outName))
+		fmt.Fprintf(b, "\treturn %s[m.%s]\n", varName, toPascal(f.Name))
 		b.WriteString("}\n\n")
 	}
 }
@@ -442,8 +430,7 @@ func writeLookupFieldsMethod(b *strings.Builder, p PGNDef, lookupMap map[string]
 	for _, f := range fields {
 		l := lookupMap[f.LookupRef]
 		varName := toLowerCamel(l.Name) + "Names"
-		outName := fieldOutputName(f)
-		fmt.Fprintf(b, "\t\t%q: %s[m.%s],\n", toSnake(outName), varName, toPascal(outName))
+		fmt.Fprintf(b, "\t\t%q: %s[m.%s],\n", toSnake(f.Name), varName, toPascal(f.Name))
 	}
 	b.WriteString("\t}\n")
 	b.WriteString("}\n\n")
