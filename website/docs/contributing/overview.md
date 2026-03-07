@@ -65,7 +65,7 @@ To add a test from real device data:
 2. Copy the `data` field as `hex` and the `decoded` fields as the `want` struct
 3. Append to the `packetTests` slice in `pgn/packets_test.go`
 
-See the [PGN tutorial](/docs/pgn-dsl/tutorial) for the full walkthrough.
+See the [PGN tutorial](/pgn-dsl/tutorial) for the full walkthrough.
 
 ## PR workflow
 
