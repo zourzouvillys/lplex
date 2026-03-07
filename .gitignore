@@ -29,3 +29,8 @@ pgn/schema.json
 *.db
 *.db-shm
 *.db-wal
+
+# Website (Docusaurus)
+website/node_modules/
+website/.docusaurus/
+website/build/

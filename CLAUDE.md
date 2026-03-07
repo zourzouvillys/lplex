@@ -149,6 +149,7 @@ lplex-cloud process
 | `pgn/` | Generated Go types for NMEA 2000 PGNs: structs, `Decode*`/`Encode` methods, `Registry` map (~120 entries, includes `PGNInfo` with `FastPacket`, `Interval`, `OnDemand`, `Draft` metadata). Name-only PGNs have `Decode: nil` but still carry description and metadata. Generated from `pgn/defs/*.pgn` via `go generate`. Hand-written helpers live alongside generated code (e.g. `victron.go` for register name lookup, `gnss_sats.go` for variable-length PGN 129540). |
 | `pgngen/` | PGN DSL parser and code generators (Go, Protobuf, JSON Schema). AST, bit-level field layout, scaling, enums, lookup tables, value-based dispatch for proprietary PGNs, `repeat=N` for repeated fields (generates slices or maps), PGN-level metadata (`fast_packet`, `interval=`, `on_demand`, `draft`). Supports name-only PGNs (no braces = no field layout, `Decode: nil`) and unknown fields (`?` marker for observed but undocumented data). |
 | `proto/replication/v1/` | Protobuf + gRPC definitions for replication protocol |
+| `website/` | Docusaurus docs site, deployed to GitHub Pages. See [`website/CLAUDE.md`](website/CLAUDE.md) for structure and sync rules. |
 
 ### Root Package File Map
 
@@ -240,6 +241,12 @@ Both `lplex` and `lplex-cloud` support automatic journal cleanup and archival vi
 - **Journal at broker level**: records reassembled frames (not raw CAN fragments), tapped via non-blocking channel send after fan-out. See `docs/format.md` for the `.lpj` binary format spec.
 - **Block-level zstd compression**: journal blocks are compressed individually with zstd (default enabled, ~4x ratio at 256KB blocks). Each compressed block has a 12-byte header (BaseTime + CompressedLen). A block index at EOF provides O(1) offset lookup; forward-scan fallback handles crash-truncated files.
 - **Broker replica mode**: `ReplicaMode` flag makes the broker honor external sequence numbers (from replication) instead of auto-incrementing. Skips ISO requests since there's no CAN bus.
+
+## Documentation
+
+The documentation site lives in `website/` (Docusaurus). See [`website/CLAUDE.md`](website/CLAUDE.md) for the full doc structure and build instructions.
+
+**When making code changes, update the docs.** If a change affects CLI flags, HTTP API, config options, the PGN DSL, the Go client, journal format, or any user-facing behavior, update the corresponding page in `website/docs/` and the root `README.md`. Stale docs are worse than no docs.
 
 ## Conventions
 
