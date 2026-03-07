@@ -4,7 +4,7 @@ CAN bus HTTP bridge for NMEA 2000. Reads raw CAN frames from a SocketCAN interfa
 
 - **Real-time SSE streaming** with [ephemeral and buffered session modes](#api), per-client filtering by PGN, manufacturer, instance, or device name
 - **Fast-packet reassembly** for multi-frame NMEA 2000 PGNs, with automatic device discovery via ISO requests
-- **[PGN decoding](#pgn-decoding)** of known NMEA 2000 message types into human-readable field values, with a [DSL-based code generator](#pgn-dsl) supporting variant dispatch for proprietary PGNs
+- **[PGN decoding](#pgn-decoding)** of known NMEA 2000 message types into human-readable field values, with a [DSL-based code generator](#pgn-dsl) supporting variant dispatch for proprietary PGNs and per-PGN metadata (fast-packet, transmission interval, on-demand)
 - **[Journal recording](#journal-recording)** to block-based `.lpj` files with zstd compression, CRC32C checksums, and O(log N) time seeking
 - **[Retention and archival](#retention-and-archival)** with max-age/min-keep/max-size knobs, soft/hard thresholds, configurable overflow policy, and pluggable archive scripts
 - **[Cloud replication](#cloud-replication)** over gRPC with mTLS, live + backfill streams, hole tracking, and lazy per-instance Broker on the cloud side
@@ -511,7 +511,7 @@ lplexdump -decode -json
 lplexdump -file recording.lpj -decode
 ```
 
-Decoding covers ~30 common PGNs (position, heading, wind, depth, engine, battery, environment, etc.). Unknown PGNs pass through with raw hex data as usual.
+The registry contains ~120 PGNs, of which ~30 have full decoders (position, heading, wind, depth, engine, battery, environment, etc.). The remaining PGNs are name-only: they carry descriptions and metadata (fast-packet, interval) but no field layout. Unknown PGNs pass through with raw hex data as usual.
 
 ## PGN DSL
 
@@ -526,17 +526,54 @@ go generate ./pgn/...   # regenerate from pgn/defs/*.pgn
 ```
 # Line comments start with #
 
-pgn 129025 "Position Rapid Update" {
+pgn 129025 "Position Rapid Update" interval=100ms {
   latitude   int32  :32  scale=1e-7  unit="deg"
   longitude  int32  :32  scale=1e-7  unit="deg"
 }
+
+pgn 129029 "GNSS Position Data" fast_packet interval=1000ms {
+  sid              uint8   :8
+  days_since_1970  uint16  :16
+  # ... more fields
+}
+
+pgn 59904 "ISO Request" on_demand {
+  requested_pgn  uint32  :24
+}
 ```
+
+#### PGN-level attributes
+
+Attributes between the description and opening `{` apply to the PGN as a whole:
+
+| Attribute | Description |
+|---|---|
+| `fast_packet` | PGN uses multi-frame fast-packet protocol |
+| `interval=<duration>` | Default transmission interval (`100ms`, `500ms`, `1s`, `2500ms`, `60s`). Stored as `time.Duration` in the registry. |
+| `on_demand` | Event-driven PGN, no periodic transmission |
+| `draft` | Definition is incomplete or reverse-engineered. Propagated to `PGNInfo.Draft`. |
+
+These are code-generated into `PGNInfo` fields in `pgn.Registry` and used by `IsFastPacket()` to identify fast-packet PGNs.
+
+#### Name-only PGNs
+
+A PGN definition without braces registers the PGN's name and metadata (fast-packet, interval, etc.) without defining a field layout. The generated `Registry` entry has `Decode: nil`.
+
+```
+pgn 129038 "AIS Class A Position Report" fast_packet
+pgn 126983 "Alert" fast_packet
+pgn 127493 "Transmission Parameters Dynamic" draft
+```
+
+This is the canonical form for PGNs whose structure is unknown or not yet implemented. Use this instead of hardcoded name maps.
+
+#### Field definitions
 
 Each field has: `name  type  :bits  [attributes...]`
 
 | Element | Description |
 |---|---|
-| `name` | Field name (snake_case). Use `_` for reserved/padding bits. |
+| `name` | Field name (snake_case). Use `_` for reserved/padding bits, `?` for unknown/undocumented data. |
 | `type` | `uint8`, `uint16`, `uint32`, `uint64`, `int8`, `int16`, `int32`, `int64`, `float32`, `float64`, `string`, or an enum name |
 | `:bits` | Bit width of the field |
 | `scale=N` | Scaling factor: `decoded = raw * scale`. Output type becomes `float64`. |
@@ -628,7 +665,7 @@ The generator produces:
 | Single constrained variant | Even a single `pgn` block with `value=` gets a dispatch function that rejects non-matching discriminator values |
 | No default means error | Without a default variant, unknown discriminator values return an error from the dispatch function |
 | Constrained encode | `Encode()` hardcodes the `value=N` literal instead of reading the struct field, so encoded frames always have the correct discriminator |
-| Reserved fields | `_` (padding) fields cannot have `value=` |
+| Reserved/unknown fields | `_` (padding) and `?` (unknown) fields cannot have `value=` |
 
 **Generated dispatch (conceptual):**
 
@@ -676,7 +713,7 @@ pgn 127501 "Binary Switch Bank Status" {
 | `group="map"` | Use `map[int]T` instead of `[]T` in Go. Keys are 1-based (NMEA convention). Default is array. |
 | `as="name"` | Override the auto-pluralized field name. Default: basic English pluralization (`indicator` -> `indicators`). |
 
-**Constraints:** `repeat=` cannot be used on reserved fields or combined with `value=`, `lookup=`, or enum types. `group=` and `as=` require `repeat=`.
+**Constraints:** `repeat=` cannot be used on reserved (`_`) or unknown (`?`) fields, or combined with `value=`, `lookup=`, or enum types. `group=` and `as=` require `repeat=`.
 
 **Generated code:** Decode produces a slice/map literal with unrolled bit reads. Encode uses bounds-checked (array) or key-checked (map) writes. Fields after a repeated field get correct bit offsets automatically.
 
