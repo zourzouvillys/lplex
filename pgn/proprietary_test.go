@@ -2,7 +2,6 @@ package pgn
 
 import (
 	"encoding/hex"
-	"strings"
 	"testing"
 )
 
@@ -117,14 +116,15 @@ func TestDecodeVictronUnknownRegister(t *testing.T) {
 }
 
 func TestDecodeProprietaryUnknownManufacturer(t *testing.T) {
-	// Unknown manufacturer codes should return an error (no default variant).
+	// Unknown manufacturer codes should return (nil, nil), not an error.
+	// We just can't decode this manufacturer's proprietary format.
 	raw, _ := hex.DecodeString("7b98aabbccddeeff")
-	_, err := Registry[61184].Decode(raw)
-	if err == nil {
-		t.Fatal("expected error for unknown manufacturer code")
+	result, err := Registry[61184].Decode(raw)
+	if err != nil {
+		t.Fatalf("unexpected error for unknown manufacturer code: %v", err)
 	}
-	if !strings.Contains(err.Error(), "unknown manufacturer_code") {
-		t.Errorf("error = %q, want substring about unknown manufacturer_code", err.Error())
+	if result != nil {
+		t.Fatalf("expected nil result for unknown manufacturer code, got %v", result)
 	}
 }
 

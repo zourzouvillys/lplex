@@ -386,8 +386,7 @@ func writeDispatchFunc(b *strings.Builder, s *Schema, pgn uint32, indices []int)
 		fmt.Fprintf(b, "\t\treturn Decode%s(data)\n", structName)
 	} else {
 		b.WriteString("\tdefault:\n")
-		fmt.Fprintf(b, "\t\treturn nil, fmt.Errorf(\"PGN %d: unknown %s value %%d\", disc)\n",
-			pgn, disc.Name)
+		b.WriteString("\t\treturn nil, nil\n")
 	}
 	b.WriteString("\t}\n")
 	b.WriteString("}\n\n")

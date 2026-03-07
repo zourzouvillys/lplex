@@ -274,9 +274,9 @@ pgn 61184 "Garmin Register" {
 
 	code := GenerateGo(s, "pgn")
 
-	// Without a default variant, unknown discriminator values should return an error.
-	if !strings.Contains(code, `unknown manufacturer_code value`) {
-		t.Error("dispatch without default should return error for unknown discriminator")
+	// Without a default variant, unknown discriminator values should return (nil, nil).
+	if !strings.Contains(code, "return nil, nil") {
+		t.Error("dispatch without default should return (nil, nil) for unknown discriminator")
 	}
 
 	// Should have both switch cases.
@@ -320,9 +320,9 @@ pgn 61184 "Victron Battery Register" {
 		t.Error("missing Decode61184 dispatch function for single constrained variant")
 	}
 
-	// Dispatch should reject unknown discriminator values.
-	if !strings.Contains(code, `unknown manufacturer_code value`) {
-		t.Error("single-variant dispatch should return error for unknown discriminator")
+	// Unknown discriminator values should return (nil, nil).
+	if !strings.Contains(code, "return nil, nil") {
+		t.Error("single-variant dispatch should return (nil, nil) for unknown discriminator")
 	}
 
 	// Registry should use the dispatch function.
