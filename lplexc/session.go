@@ -140,6 +140,9 @@ func filterSessionJSON(f *Filter) map[string]any {
 	if len(f.PGNs) > 0 {
 		m["pgn"] = f.PGNs
 	}
+	if len(f.ExcludePGNs) > 0 {
+		m["exclude_pgn"] = f.ExcludePGNs
+	}
 	if len(f.Manufacturers) > 0 {
 		m["manufacturer"] = f.Manufacturers
 	}

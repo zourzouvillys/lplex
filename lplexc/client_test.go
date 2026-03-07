@@ -400,18 +400,64 @@ func TestRequestPGNTimeout(t *testing.T) {
 func TestFilterQueryParams(t *testing.T) {
 	f := &Filter{
 		PGNs:          []uint32{129025, 130306},
+		ExcludePGNs:   []uint32{60928, 126996},
 		Manufacturers: []string{"Garmin"},
 	}
 	params := filterQueryParams(f)
 	if params == "" {
 		t.Fatal("empty params")
 	}
-	// Check that pgn values are present.
-	if !containsSubstring(params, "pgn=129025") {
-		t.Errorf("missing pgn=129025 in %q", params)
+	for _, want := range []string{
+		"pgn=129025",
+		"pgn=130306",
+		"exclude_pgn=60928",
+		"exclude_pgn=126996",
+		"manufacturer=Garmin",
+	} {
+		if !containsSubstring(params, want) {
+			t.Errorf("missing %q in %q", want, params)
+		}
 	}
-	if !containsSubstring(params, "manufacturer=Garmin") {
-		t.Errorf("missing manufacturer=Garmin in %q", params)
+}
+
+func TestFilterSessionJSON(t *testing.T) {
+	f := &Filter{
+		PGNs:          []uint32{129025},
+		ExcludePGNs:   []uint32{60928, 126996},
+		Manufacturers: []string{"Garmin"},
+		Instances:     []uint8{2},
+		Names:         []string{"deadbeef"},
+	}
+	m := filterSessionJSON(f)
+
+	if pgns, ok := m["pgn"]; !ok {
+		t.Error("missing pgn")
+	} else if got := pgns.([]uint32); len(got) != 1 || got[0] != 129025 {
+		t.Errorf("pgn = %v, want [129025]", got)
+	}
+
+	if ep, ok := m["exclude_pgn"]; !ok {
+		t.Error("missing exclude_pgn")
+	} else if got := ep.([]uint32); len(got) != 2 || got[0] != 60928 || got[1] != 126996 {
+		t.Errorf("exclude_pgn = %v, want [60928 126996]", got)
+	}
+
+	if mfr, ok := m["manufacturer"]; !ok {
+		t.Error("missing manufacturer")
+	} else if got := mfr.([]string); len(got) != 1 || got[0] != "Garmin" {
+		t.Errorf("manufacturer = %v, want [Garmin]", got)
+	}
+
+	if inst, ok := m["instance"]; !ok {
+		t.Error("missing instance")
+	} else if got := inst.([]uint8); len(got) != 1 || got[0] != 2 {
+		t.Errorf("instance = %v, want [2]", got)
+	}
+
+	if names, ok := m["name"]; !ok {
+		t.Error("missing name")
+	} else if got := names.([]string); len(got) != 1 || got[0] != "deadbeef" {
+		t.Errorf("name = %v, want [deadbeef]", got)
 	}
 }
 

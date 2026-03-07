@@ -830,6 +830,89 @@ func TestCreateSessionEmptyFilter(t *testing.T) {
 	}
 }
 
+func TestCreateSessionWithExcludePGN(t *testing.T) {
+	srv, b := newTestServer()
+	defer close(b.rxFrames)
+
+	body := `{"buffer_timeout":"PT5M","filter":{"exclude_pgn":[60928,126996]}}`
+	req := httptest.NewRequest("PUT", "/clients/exclude-test", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+
+	b.sessionMu.RLock()
+	session := b.sessions["exclude-test"]
+	b.sessionMu.RUnlock()
+
+	if session.Filter == nil {
+		t.Fatal("filter should not be nil")
+	}
+	if len(session.Filter.ExcludePGNs) != 2 {
+		t.Fatalf("ExcludePGNs: got %d, want 2", len(session.Filter.ExcludePGNs))
+	}
+	if session.Filter.ExcludePGNs[0] != 60928 || session.Filter.ExcludePGNs[1] != 126996 {
+		t.Errorf("ExcludePGNs: got %v, want [60928 126996]", session.Filter.ExcludePGNs)
+	}
+}
+
+func TestEphemeralSSEExcludePGN(t *testing.T) {
+	srv, b := newTestServer()
+	defer close(b.rxFrames)
+
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/events?exclude_pgn=60928")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	// Inject excluded and non-excluded PGNs.
+	injectFrame(b, 60928, 1, []byte{0, 0, 0, 0, 0, 0, 0, 0})
+	injectFrame(b, 129025, 1, []byte{0xAA, 0, 0, 0, 0, 0, 0, 0})
+	time.Sleep(50 * time.Millisecond)
+
+	// Read SSE events. Only non-excluded PGN should arrive.
+	scanner := bufio.NewScanner(resp.Body)
+	done := make(chan []string, 1)
+	go func() {
+		var events []string
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "data: ") {
+				events = append(events, line[6:])
+				if len(events) >= 1 {
+					done <- events
+					return
+				}
+			}
+		}
+		done <- events
+	}()
+
+	select {
+	case events := <-done:
+		for _, data := range events {
+			var msg frameJSON
+			if err := json.Unmarshal([]byte(data), &msg); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if msg.PGN == 60928 {
+				t.Error("excluded PGN 60928 should not appear in SSE output")
+			}
+		}
+		if len(events) < 1 {
+			t.Error("expected at least one SSE event for non-excluded PGN")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for SSE event")
+	}
+}
+
 func TestSendDisabledByDefault(t *testing.T) {
 	b := newTestBroker()
 	go b.Run()

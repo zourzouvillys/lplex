@@ -412,6 +412,87 @@ func TestBrokerFilterCombined(t *testing.T) {
 	}
 }
 
+func TestBrokerFilterExcludePGN(t *testing.T) {
+	b := newTestBroker()
+	go b.Run()
+	defer b.CloseRx()
+	drainTxFrame(b, time.Second)
+
+	// Exclude PGN 60928 (address claim) and 126996 (product info).
+	filter := &EventFilter{ExcludePGNs: []uint32{60928, 126996}}
+	c := b.NewConsumer(ConsumerConfig{Cursor: b.CurrentSeq() + 1, Filter: filter})
+	defer func() { _ = c.Close() }()
+
+	// Excluded PGN 60928 should be dropped.
+	injectFrame(b, 60928, 1, []byte{0, 0, 0, 0, 0, 0, 0, 0})
+	// Excluded PGN 126996 should be dropped.
+	injectFrame(b, 126996, 1, []byte{0, 0, 0, 0, 0, 0, 0, 0})
+	// Non-excluded PGN 129025 should pass.
+	injectFrame(b, 129025, 1, []byte{0xAA, 0, 0, 0, 0, 0, 0, 0})
+	// Another non-excluded PGN should pass.
+	injectFrame(b, 130306, 2, []byte{0xBB, 0, 0, 0, 0, 0, 0, 0})
+	time.Sleep(50 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	frame, err := c.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Header.PGN != 129025 {
+		t.Errorf("first frame PGN = %d, want 129025", frame.Header.PGN)
+	}
+
+	frame, err = c.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Header.PGN != 130306 {
+		t.Errorf("second frame PGN = %d, want 130306", frame.Header.PGN)
+	}
+}
+
+func TestBrokerFilterExcludeWithInclude(t *testing.T) {
+	b := newTestBroker()
+	go b.Run()
+	defer b.CloseRx()
+	drainTxFrame(b, time.Second)
+
+	// Include PGN 129025 and 129026, but exclude 129026.
+	// Exclude takes precedence: only 129025 should pass.
+	filter := &EventFilter{
+		PGNs:        []uint32{129025, 129026},
+		ExcludePGNs: []uint32{129026},
+	}
+	c := b.NewConsumer(ConsumerConfig{Cursor: b.CurrentSeq() + 1, Filter: filter})
+	defer func() { _ = c.Close() }()
+
+	injectFrame(b, 129025, 1, []byte{0xAA, 0, 0, 0, 0, 0, 0, 0})
+	injectFrame(b, 129026, 1, []byte{0xBB, 0, 0, 0, 0, 0, 0, 0})
+	injectFrame(b, 130306, 1, []byte{0xCC, 0, 0, 0, 0, 0, 0, 0})
+	time.Sleep(50 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	frame, err := c.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Header.PGN != 129025 {
+		t.Errorf("frame PGN = %d, want 129025", frame.Header.PGN)
+	}
+
+	// No more frames should arrive within a short timeout.
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer shortCancel()
+	_, err = c.Next(shortCtx)
+	if err == nil {
+		t.Error("expected timeout, got unexpected frame")
+	}
+}
+
 func TestBrokerBufferTimeoutZeroResetsCursor(t *testing.T) {
 	b := newTestBroker()
 	go b.Run()
