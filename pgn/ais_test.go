@@ -332,7 +332,7 @@ func TestAISClassARegistryEntry(t *testing.T) {
 
 func TestAISNameOnlyPGNsInRegistry(t *testing.T) {
 	// Verify that name-only AIS PGNs are still in the registry
-	nameOnlyPGNs := []uint32{129040, 129792, 129794, 129795, 129796, 129797, 129798, 129799, 129800, 129801, 129802, 129803, 129804, 129805, 129806, 129807, 129808}
+	nameOnlyPGNs := []uint32{129040, 129792, 129795, 129796, 129797, 129798, 129799, 129800, 129801, 129802, 129803, 129804, 129805, 129806, 129807, 129808}
 	for _, pgn := range nameOnlyPGNs {
 		info, ok := Registry[pgn]
 		if !ok {

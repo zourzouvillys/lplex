@@ -303,6 +303,35 @@ var packetTests = []packetTest{
 		},
 	},
 
+	// ---- PGN 129794: AIS Class A Static and Voyage Related Data ----
+	{
+		desc: "AIS Class A static: CONTINUUM heading to EVERETT",
+		pgn:  129794,
+		hex:  "05823df315ffffffff57444e32343738434f4e54494e55554d202020202020202020202025c800320014007800ffffffffffff8c00455645524554542020202020202020202020202001e1",
+		want: AISClassAStaticAndVoyageRelatedData{
+			MessageId:            5,
+			RepeatIndicator:      0,
+			UserId:               368262530,
+			ImoNumber:            0xFFFFFFFF,
+			Callsign:             "WDN2478",
+			Name:                 "CONTINUUM           ",
+			ShipType:             37,
+			ShipLength:           20.0,
+			ShipBeam:             5.0,
+			PositionRefStarboard: 2.0,
+			PositionRefBow:       12.0,
+			EtaDate:              0xFFFF,
+			EtaTime:              429496.7295,
+			Draught:              1.40,
+			Destination:          "EVERETT             ",
+			AisVersionIndicator:  1,
+			GnssType:             PositionFixTypeUndefined,
+			Dte:                  0,
+			AisTransceiverInfo:   AISTransceiverChannelBVdl,
+		},
+		epsilon: 0.01,
+	},
+
 	// ---- PGN 130312: Temperature ----
 	{
 		desc: "sea water temperature 293.15K (20°C)",
