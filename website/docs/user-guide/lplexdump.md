@@ -93,6 +93,9 @@ The `-boat` flag automates server discovery with local-first, cloud-fallback beh
 Create `~/.config/lplex/lplexdump.conf` (HOCON format):
 
 ```hocon
+# How long to wait for mDNS discovery before giving up (default: 3s)
+mdns-timeout = 5s
+
 boats {
   sv-dockwise {
     # mDNS instance name (matches the hostname lplex registers)
@@ -108,11 +111,17 @@ boats {
 }
 ```
 
+| Setting | Default | Description |
+|---|---|---|
+| `mdns-timeout` | `3s` | How long to wait for mDNS discovery before falling back to cloud |
+| `boats.<name>.mdns` | | mDNS instance name to look for (matches the hostname lplex registers) |
+| `boats.<name>.cloud` | | Cloud fallback URL (full base URL including instance path) |
+
 ### Connection flow
 
 When you run `lplexdump -boat sv-dockwise`:
 
-1. Try mDNS discovery for the configured instance name (3s timeout)
+1. Try mDNS discovery for the configured instance name (configurable timeout, default 3s)
 2. If found, connect directly over the local network
 3. If mDNS fails, fall back to the configured cloud URL
 

@@ -160,20 +160,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Load boat config if -boat is set.
+	// Load config if -boat is set or -config is specified.
 	var boat *BoatConfig
+	var mdnsTimeout time.Duration
 	if boatSet || *configPath != "" {
 		cfgPath := *configPath
 		if cfgPath == "" {
 			cfgPath = defaultConfigPath()
 		}
-		boats, err := loadBoatConfig(cfgPath)
+		dc, err := loadConfig(cfgPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "config error: %v\n", err)
 			os.Exit(1)
 		}
+		mdnsTimeout = dc.MDNSTimeout
 		if boatSet {
-			bc, err := resolveBoat(*boatName, boats)
+			bc, err := resolveBoat(*boatName, dc.Boats)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
@@ -182,12 +184,30 @@ func main() {
 		}
 	}
 
+	// discoverWithTimeout wraps an mDNS discover call with the configured timeout.
+	discoverNamed := func(name string) (string, error) {
+		if mdnsTimeout > 0 {
+			ctx, cancel := context.WithTimeout(context.Background(), mdnsTimeout)
+			defer cancel()
+			return lplexc.DiscoverNamed(ctx, name)
+		}
+		return lplexc.DiscoverNamed(context.Background(), name)
+	}
+	discoverAny := func() (string, error) {
+		if mdnsTimeout > 0 {
+			ctx, cancel := context.WithTimeout(context.Background(), mdnsTimeout)
+			defer cancel()
+			return lplexc.Discover(ctx)
+		}
+		return lplexc.Discover(context.Background())
+	}
+
 	// resolveServer attempts mDNS discovery then cloud fallback for a boat config,
 	// or plain mDNS discovery if no boat is configured.
 	resolveServer := func() string {
 		if boat != nil {
 			if boat.MDNS != "" {
-				url, err := lplexc.DiscoverNamed(context.Background(), boat.MDNS)
+				url, err := discoverNamed(boat.MDNS)
 				if err == nil {
 					log.Printf("discovered %s via mDNS at %s", boat.Name, url)
 					return url
@@ -203,7 +223,7 @@ func main() {
 		}
 
 		// No boat config, try generic mDNS discovery.
-		discovered, err := lplexc.Discover(context.Background())
+		discovered, err := discoverAny()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "mDNS discovery failed: %v\n", err)
 			fmt.Fprintf(os.Stderr, "specify -server explicitly, e.g. -server http://inuc1.local:8089\n")

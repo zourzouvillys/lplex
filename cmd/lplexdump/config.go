@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/gurkankaymak/hocon"
 )
@@ -16,6 +18,12 @@ type BoatConfig struct {
 	Cloud string // cloud fallback URL, e.g. "https://lplex.dockwise.app/instances/sv-dockwise"
 }
 
+// DumpConfig holds global settings from the config file.
+type DumpConfig struct {
+	Boats       map[string]BoatConfig
+	MDNSTimeout time.Duration // 0 means use default (3s)
+}
+
 // defaultConfigPath returns ~/.config/lplex/lplexdump.conf.
 func defaultConfigPath() string {
 	home, err := os.UserHomeDir()
@@ -25,51 +33,75 @@ func defaultConfigPath() string {
 	return filepath.Join(home, ".config", "lplex", "lplexdump.conf")
 }
 
-// loadBoatConfig reads the HOCON config file and returns all boats defined
-// under the "boats" key. Returns an empty map (no error) if the file doesn't exist.
-func loadBoatConfig(path string) (map[string]BoatConfig, error) {
+// loadConfig reads the HOCON config file and returns the parsed config.
+// Returns a zero DumpConfig (no error) if the file doesn't exist.
+func loadConfig(path string) (DumpConfig, error) {
 	if path == "" {
-		return nil, nil
+		return DumpConfig{}, nil
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return DumpConfig{}, nil
 		}
-		return nil, fmt.Errorf("checking config %s: %w", path, err)
+		return DumpConfig{}, fmt.Errorf("checking config %s: %w", path, err)
 	}
 	if info.IsDir() {
-		return nil, fmt.Errorf("config path is a directory: %s", path)
+		return DumpConfig{}, fmt.Errorf("config path is a directory: %s", path)
 	}
 
 	cfg, err := hocon.ParseResource(path)
 	if err != nil {
-		return nil, fmt.Errorf("parsing config %s: %w", path, err)
+		return DumpConfig{}, fmt.Errorf("parsing config %s: %w", path, err)
 	}
 
+	var dc DumpConfig
+
+	// Parse mdns-timeout (e.g. "5s", "500ms").
+	if v := getString(cfg, "mdns-timeout"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return DumpConfig{}, fmt.Errorf("config mdns-timeout: %w", err)
+		}
+		dc.MDNSTimeout = d
+	}
+
+	// Parse boats.
 	boatsObj := cfg.GetObject("boats")
-	if boatsObj == nil {
-		return nil, nil
+	if boatsObj != nil {
+		dc.Boats = make(map[string]BoatConfig, len(boatsObj))
+		for name := range boatsObj {
+			bc := BoatConfig{Name: name}
+
+			if v := getString(cfg, "boats."+name+".mdns"); v != "" {
+				bc.MDNS = v
+			}
+			if v := getString(cfg, "boats."+name+".cloud"); v != "" {
+				bc.Cloud = v
+			}
+			if bc.MDNS == "" && bc.Cloud == "" {
+				return DumpConfig{}, fmt.Errorf("boat %q must have at least one of mdns or cloud", name)
+			}
+			dc.Boats[name] = bc
+		}
 	}
 
-	boats := make(map[string]BoatConfig, len(boatsObj))
-	for name := range boatsObj {
-		bc := BoatConfig{Name: name}
+	return dc, nil
+}
 
-		if v := cfg.GetString("boats." + name + ".mdns"); v != "" {
-			bc.MDNS = v
-		}
-		if v := cfg.GetString("boats." + name + ".cloud"); v != "" {
-			bc.Cloud = v
-		}
-		if bc.MDNS == "" && bc.Cloud == "" {
-			return nil, fmt.Errorf("boat %q must have at least one of mdns or cloud", name)
-		}
-		boats[name] = bc
+// getString extracts a raw string value from the HOCON config. We can't use
+// cfg.GetString() because hocon.String.String() re-wraps values containing
+// special characters (like :// in URLs) in literal double quotes.
+func getString(cfg *hocon.Config, path string) string {
+	v := cfg.Get(path)
+	if v == nil {
+		return ""
 	}
-
-	return boats, nil
+	if s, ok := v.(hocon.String); ok {
+		return strings.Trim(string(s), `"`)
+	}
+	return v.String()
 }
 
 // resolveBoat picks the right boat config. If name is empty and there's exactly
