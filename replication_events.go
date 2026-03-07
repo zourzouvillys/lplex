@@ -59,13 +59,13 @@ func (l *EventLog) Recent(n int) []ReplicationEvent {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if n > eventLogSize {
-		n = eventLogSize
-	}
-	n = min(n, l.count)
-	if n <= 0 {
+	if n <= 0 || l.count == 0 {
 		return nil
 	}
+	// Cap to ring buffer size. Explicit constant bound satisfies CodeQL's
+	// uncontrolled-allocation-size check.
+	const maxAlloc = eventLogSize
+	n = min(min(n, l.count), maxAlloc)
 
 	result := make([]ReplicationEvent, n)
 	for i := range n {

@@ -96,11 +96,16 @@ var victronRegisterNames = map[uint16]string{
     0xEDD3: "Yield Today",
 }
 
-func VictronRegisterName(v uint16) string {
-    if name, ok := victronRegisterNames[v]; ok {
-        return name
+// RegisterName returns the human-readable name, or empty if unknown.
+func (m VictronBatteryRegister) RegisterName() string {
+    return victronRegisterNames[m.Register]
+}
+
+// LookupFields returns JSON field name -> resolved name for display code.
+func (m VictronBatteryRegister) LookupFields() map[string]string {
+    return map[string]string{
+        "register": victronRegisterNames[m.Register],
     }
-    return ""
 }
 ```
 
@@ -131,5 +136,5 @@ If the DSL field name ends in `_id`, the suffix is stripped in the generated Go 
 | `String()` | Yes (on the type) | `Name()` function |
 | Type safety | Yes | No |
 | Key space | Dense (0, 1, 2, ...) | Sparse (any values) |
-| JSON output | String value | Integer (with name available) |
+| JSON output | String value | `{"id": <raw>, "name": "..."}` object |
 | Use case | Small finite sets | Large/sparse mappings |
