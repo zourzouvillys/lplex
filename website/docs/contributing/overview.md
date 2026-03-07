@@ -55,6 +55,18 @@ make proto
 - Sequence numbers start at 1 (0 means "never ACK'd").
 - Run `golangci-lint run` before pushing. CI enforces this.
 
+## PGN packet tests
+
+PGN decoders have a table-driven test framework in `pgn/packets_test.go`. Each entry specifies a PGN number, hex packet data (as output by `lplexdump`), and the expected decoded struct. The framework verifies both decode and encode round-trip automatically.
+
+To add a test from real device data:
+
+1. Capture a frame: `lplexdump -decode -json -pgn <pgn>`
+2. Copy the `data` field as `hex` and the `decoded` fields as the `want` struct
+3. Append to the `packetTests` slice in `pgn/packets_test.go`
+
+See the [PGN tutorial](/docs/pgn-dsl/tutorial) for the full walkthrough.
+
 ## PR workflow
 
 1. Fork and create a feature branch

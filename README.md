@@ -513,6 +513,10 @@ lplexdump -file recording.lpj -decode
 
 The registry contains ~120 PGNs, of which ~30 have full decoders (position, heading, wind, depth, engine, battery, environment, etc.). The remaining PGNs are name-only: they carry descriptions and metadata (fast-packet, interval) but no field layout. Unknown PGNs pass through with raw hex data as usual.
 
+### Packet tests
+
+PGN decoders are verified by table-driven tests in `pgn/packets_test.go`. Each test vector specifies hex packet data and the expected decoded struct, with automatic round-trip verification. To add a test from real device data, capture a frame with `lplexdump -decode -json` and copy the `data` and `decoded` fields into a new entry.
+
 ## PGN DSL
 
 PGN definitions live in `pgn/defs/*.pgn` using a compact DSL that describes bit-level field layouts. The code generator (`pgngen`) reads these files and produces Go structs with `Decode*`/`Encode` methods, a `Registry` map, Protobuf definitions, and JSON Schema.
