@@ -189,6 +189,9 @@ func filterQueryParams(f *Filter) string {
 	for _, p := range f.PGNs {
 		v.Add("pgn", strconv.FormatUint(uint64(p), 10))
 	}
+	for _, p := range f.ExcludePGNs {
+		v.Add("exclude_pgn", strconv.FormatUint(uint64(p), 10))
+	}
 	for _, m := range f.Manufacturers {
 		v.Add("manufacturer", m)
 	}

@@ -78,10 +78,12 @@ func main() {
 	startTime := flag.String("start", "", "seek to RFC3339 timestamp before replaying")
 
 	var filterPGNs uintSlice
+	var excludePGNs uintSlice
 	var filterManufacturers stringSlice
 	var filterInstances uintSlice
 	var filterNames stringSlice
 	flag.Var(&filterPGNs, "pgn", "filter by PGN (repeatable)")
+	flag.Var(&excludePGNs, "exclude-pgn", "exclude PGN from output (repeatable)")
 	flag.Var(&filterManufacturers, "manufacturer", "filter by manufacturer name (repeatable)")
 	flag.Var(&filterInstances, "instance", "filter by device instance (repeatable)")
 	flag.Var(&filterNames, "name", "filter by 64-bit CAN NAME in hex (repeatable)")
@@ -127,7 +129,7 @@ func main() {
 		defer cancel()
 
 		devices := newDeviceMap()
-		if err := runReplay(ctx, *filePath, *speed, *startTime, *jsonMode, *decode, filterPGNs, filterManufacturers, filterInstances, filterNames, devices); err != nil {
+		if err := runReplay(ctx, *filePath, *speed, *startTime, *jsonMode, *decode, filterPGNs, excludePGNs, filterManufacturers, filterInstances, filterNames, devices); err != nil {
 			fmt.Fprintf(os.Stderr, "replay error: %v\n", err)
 			os.Exit(1)
 		}
@@ -161,7 +163,7 @@ func main() {
 	devices := newDeviceMap()
 	var lastSeq atomic.Uint64
 
-	filter := buildFilter(filterPGNs, filterManufacturers, filterInstances, filterNames)
+	filter := buildFilter(filterPGNs, excludePGNs, filterManufacturers, filterInstances, filterNames)
 	buffered := *bufferTimeout != ""
 
 	for {
@@ -198,8 +200,8 @@ func main() {
 	}
 }
 
-func buildFilter(pgns uintSlice, manufacturers stringSlice, instances uintSlice, names stringSlice) *lplexc.Filter {
-	if len(pgns) == 0 && len(manufacturers) == 0 && len(instances) == 0 && len(names) == 0 {
+func buildFilter(pgns uintSlice, excludePGNs uintSlice, manufacturers stringSlice, instances uintSlice, names stringSlice) *lplexc.Filter {
+	if len(pgns) == 0 && len(excludePGNs) == 0 && len(manufacturers) == 0 && len(instances) == 0 && len(names) == 0 {
 		return nil
 	}
 	f := &lplexc.Filter{
@@ -208,6 +210,9 @@ func buildFilter(pgns uintSlice, manufacturers stringSlice, instances uintSlice,
 	}
 	for _, p := range pgns {
 		f.PGNs = append(f.PGNs, uint32(p))
+	}
+	for _, p := range excludePGNs {
+		f.ExcludePGNs = append(f.ExcludePGNs, uint32(p))
 	}
 	for _, i := range instances {
 		f.Instances = append(f.Instances, uint8(i))
@@ -416,7 +421,7 @@ func runInspect(path string) error {
 // Journal replay
 // ---------------------------------------------------------------------------
 
-func runReplay(ctx context.Context, path string, speed float64, startTimeStr string, jsonMode, decode bool, pgns uintSlice, manufacturers stringSlice, instances uintSlice, names stringSlice, devices *deviceMap) error {
+func runReplay(ctx context.Context, path string, speed float64, startTimeStr string, jsonMode, decode bool, pgns uintSlice, excludePGNs uintSlice, manufacturers stringSlice, instances uintSlice, names stringSlice, devices *deviceMap) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open journal: %w", err)
@@ -488,7 +493,7 @@ func runReplay(ctx context.Context, path string, speed float64, startTimeStr str
 		lastTs = entry.Timestamp
 
 		// Client-side filtering.
-		if !matchesReplayFilter(entry, devices, pgns, manufacturers, instances, names) {
+		if !matchesReplayFilter(entry, devices, pgns, excludePGNs, manufacturers, instances, names) {
 			prevTs = entry.Timestamp
 			continue
 		}
@@ -573,8 +578,8 @@ func entryToFrame(entry journal.Entry, seq uint64) lplexc.Frame {
 
 // matchesReplayFilter applies client-side filters to a journal entry.
 // Categories are AND'd, values within a category are OR'd.
-func matchesReplayFilter(entry journal.Entry, devices *deviceMap, pgns uintSlice, manufacturers stringSlice, instances uintSlice, names stringSlice) bool {
-	if len(pgns) == 0 && len(manufacturers) == 0 && len(instances) == 0 && len(names) == 0 {
+func matchesReplayFilter(entry journal.Entry, devices *deviceMap, pgns uintSlice, excludePGNs uintSlice, manufacturers stringSlice, instances uintSlice, names stringSlice) bool {
+	if len(pgns) == 0 && len(excludePGNs) == 0 && len(manufacturers) == 0 && len(instances) == 0 && len(names) == 0 {
 		return true
 	}
 
@@ -588,6 +593,14 @@ func matchesReplayFilter(entry journal.Entry, devices *deviceMap, pgns uintSlice
 		}
 		if !matched {
 			return false
+		}
+	}
+
+	if len(excludePGNs) > 0 {
+		for _, pgn := range excludePGNs {
+			if uint32(pgn) == entry.Header.PGN {
+				return false
+			}
 		}
 	}
 

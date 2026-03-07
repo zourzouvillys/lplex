@@ -70,6 +70,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		BufferTimeout string `json:"buffer_timeout"`
 		Filter        *struct {
 			PGN          []uint32 `json:"pgn"`
+			ExcludePGN   []uint32 `json:"exclude_pgn"`
 			Manufacturer []string `json:"manufacturer"`
 			Instance     []uint8  `json:"instance"`
 			Name         []string `json:"name"`
@@ -94,6 +95,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	if req.Filter != nil {
 		filter = &EventFilter{
 			PGNs:          req.Filter.PGN,
+			ExcludePGNs:   req.Filter.ExcludePGN,
 			Manufacturers: req.Filter.Manufacturer,
 			Instances:     req.Filter.Instance,
 		}
@@ -225,11 +227,12 @@ func (s *Server) HandleEphemeralSSE(w http.ResponseWriter, r *http.Request) {
 func ParseFilterParams(r *http.Request) (*EventFilter, error) {
 	q := r.URL.Query()
 	pgns := q["pgn"]
+	excludePGNs := q["exclude_pgn"]
 	manufacturers := q["manufacturer"]
 	instances := q["instance"]
 	names := q["name"]
 
-	if len(pgns) == 0 && len(manufacturers) == 0 && len(instances) == 0 && len(names) == 0 {
+	if len(pgns) == 0 && len(excludePGNs) == 0 && len(manufacturers) == 0 && len(instances) == 0 && len(names) == 0 {
 		return nil, nil
 	}
 
@@ -243,6 +246,14 @@ func ParseFilterParams(r *http.Request) (*EventFilter, error) {
 			return nil, fmt.Errorf("invalid pgn %q: %w", s, err)
 		}
 		f.PGNs = append(f.PGNs, uint32(v))
+	}
+
+	for _, s := range excludePGNs {
+		v, err := strconv.ParseUint(s, 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("invalid exclude_pgn %q: %w", s, err)
+		}
+		f.ExcludePGNs = append(f.ExcludePGNs, uint32(v))
 	}
 
 	for _, s := range instances {

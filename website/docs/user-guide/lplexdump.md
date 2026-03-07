@@ -38,6 +38,7 @@ lplexdump -server http://inuc1.local:8089 -decode
 | `-speed` | `1.0` | Playback speed for journal replay (0 = max speed) |
 | `-start` | (empty) | Seek to this time (RFC 3339) before playing |
 | `-pgn` | (all) | Filter by PGN number (repeatable) |
+| `-exclude-pgn` | (none) | Exclude specific PGN from output (repeatable) |
 | `-manufacturer` | (all) | Filter by manufacturer name (repeatable) |
 | `-instance` | (all) | Filter by device instance (repeatable) |
 | `-name` | (all) | Filter by 64-bit CAN NAME hex (repeatable) |

@@ -44,6 +44,7 @@ type ClientSession struct {
 // a category are OR'd (any value in the list matches).
 type EventFilter struct {
 	PGNs          []uint32
+	ExcludePGNs   []uint32
 	Manufacturers []string
 	Instances     []uint8
 	Names         []uint64 // 64-bit CAN NAMEs
@@ -51,8 +52,8 @@ type EventFilter struct {
 
 // IsEmpty returns true if no filter criteria are set.
 func (f *EventFilter) IsEmpty() bool {
-	return f == nil || (len(f.PGNs) == 0 && len(f.Manufacturers) == 0 &&
-		len(f.Instances) == 0 && len(f.Names) == 0)
+	return f == nil || (len(f.PGNs) == 0 && len(f.ExcludePGNs) == 0 &&
+		len(f.Manufacturers) == 0 && len(f.Instances) == 0 && len(f.Names) == 0)
 }
 
 // matches checks if a frame passes this filter. For device-based criteria
@@ -63,6 +64,10 @@ func (f *EventFilter) matches(header CANHeader, devices *DeviceRegistry) bool {
 	}
 
 	if len(f.PGNs) > 0 && !slices.Contains(f.PGNs, header.PGN) {
+		return false
+	}
+
+	if len(f.ExcludePGNs) > 0 && slices.Contains(f.ExcludePGNs, header.PGN) {
 		return false
 	}
 
@@ -109,8 +114,9 @@ func (f *EventFilter) matchesDevice(dev *Device) bool {
 // have been flattened to source addresses. Used during replay to avoid
 // holding the ring buffer lock while querying the device registry.
 type resolvedFilter struct {
-	pgns    map[uint32]struct{} // nil = all PGNs
-	sources map[uint8]struct{}  // nil = all sources
+	pgns        map[uint32]struct{} // nil = all PGNs
+	excludePGNs map[uint32]struct{} // nil = no exclusions
+	sources     map[uint8]struct{}  // nil = all sources
 }
 
 // resolve snapshots the device registry and converts device-based filter
@@ -126,6 +132,13 @@ func (f *EventFilter) resolve(devices *DeviceRegistry) *resolvedFilter {
 		r.pgns = make(map[uint32]struct{}, len(f.PGNs))
 		for _, pgn := range f.PGNs {
 			r.pgns[pgn] = struct{}{}
+		}
+	}
+
+	if len(f.ExcludePGNs) > 0 {
+		r.excludePGNs = make(map[uint32]struct{}, len(f.ExcludePGNs))
+		for _, pgn := range f.ExcludePGNs {
+			r.excludePGNs[pgn] = struct{}{}
 		}
 	}
 
@@ -147,6 +160,11 @@ func (r *resolvedFilter) matches(header CANHeader) bool {
 	}
 	if r.pgns != nil {
 		if _, ok := r.pgns[header.PGN]; !ok {
+			return false
+		}
+	}
+	if r.excludePGNs != nil {
+		if _, ok := r.excludePGNs[header.PGN]; ok {
 			return false
 		}
 	}

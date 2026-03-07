@@ -372,7 +372,7 @@ CANWriter goroutine            ReplicationClient (optional)
 
 ### Ephemeral streaming
 
-`GET /events` with optional query params: `pgn`, `manufacturer`, `instance`, `name` (hex).
+`GET /events` with optional query params: `pgn`, `exclude_pgn`, `manufacturer`, `instance`, `name` (hex).
 
 No session, no replay, no ACK. Zero server-side state after disconnect.
 
@@ -396,7 +396,7 @@ Disconnected sessions keep their cursor for the buffer duration.
 
 `GET /values` returns the most recently received frame for each (device, PGN) pair. Grouped by device, sorted by source address. Useful for getting a snapshot of bus state without subscribing to SSE.
 
-Supports the same filter query params as `/events`: `pgn`, `manufacturer`, `instance`, `name` (hex). Example: `GET /values?pgn=129025&manufacturer=Garmin`.
+Supports the same filter query params as `/events`: `pgn`, `exclude_pgn`, `manufacturer`, `instance`, `name` (hex). Example: `GET /values?pgn=129025&manufacturer=Garmin`.
 
 ### Replication status (boat)
 

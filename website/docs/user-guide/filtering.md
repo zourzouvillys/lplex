@@ -11,7 +11,8 @@ lplex supports filtering frames by PGN, manufacturer, device instance, and CAN N
 
 | Filter | Description | Example |
 |---|---|---|
-| PGN | NMEA 2000 Parameter Group Number | `129025` (position), `130306` (wind) |
+| PGN | NMEA 2000 Parameter Group Number (include) | `129025` (position), `130306` (wind) |
+| Exclude PGN | NMEA 2000 Parameter Group Number (exclude) | `60928` (address claim) |
 | Manufacturer | Device manufacturer name | `Garmin`, `Victron` |
 | Instance | Device instance number (0-252) | `0`, `1` |
 | NAME | 64-bit ISO 11783 CAN NAME (hex) | `0x00A1B2C3D4E5F600` |
@@ -33,6 +34,9 @@ Use repeatable flags:
 # Wind and position data from Garmin
 lplexdump -pgn 129025 -pgn 130306 -manufacturer Garmin
 
+# Everything except address claims and product info
+lplexdump -exclude-pgn 60928 -exclude-pgn 126996
+
 # All data from device instance 0
 lplexdump -instance 0
 
@@ -48,6 +52,9 @@ Pass filter parameters as query strings on `GET /events`:
 
 ```bash
 curl -N "http://inuc1.local:8089/events?pgn=129025&pgn=130306&manufacturer=Garmin"
+
+# Exclude specific PGNs
+curl -N "http://inuc1.local:8089/events?exclude_pgn=60928&exclude_pgn=126996"
 ```
 
 ### Buffered mode
@@ -89,10 +96,11 @@ The filter object used in session creation and client libraries:
 ```json
 {
   "pgn": [129025, 129026, 130306],
+  "exclude_pgn": [60928, 126996],
   "manufacturer": ["Garmin", "Victron"],
   "instance": [0, 1],
   "name": ["0x00A1B2C3D4E5F600"]
 }
 ```
 
-All fields are optional. An empty filter (or no filter) matches all frames.
+All fields are optional. An empty filter (or no filter) matches all frames. `pgn` (include) and `exclude_pgn` can be combined: include is checked first, then exclude.

@@ -37,6 +37,7 @@ type Device struct {
 // Categories are AND'd, values within a category are OR'd.
 type Filter struct {
 	PGNs          []uint32 `json:"pgn,omitempty"`
+	ExcludePGNs   []uint32 `json:"exclude_pgn,omitempty"`
 	Manufacturers []string `json:"manufacturer,omitempty"`
 	Instances     []uint8  `json:"instance,omitempty"`
 	Names         []string `json:"name,omitempty"`
@@ -44,8 +45,8 @@ type Filter struct {
 
 // IsEmpty returns true if no filter criteria are set.
 func (f *Filter) IsEmpty() bool {
-	return f == nil || (len(f.PGNs) == 0 && len(f.Manufacturers) == 0 &&
-		len(f.Instances) == 0 && len(f.Names) == 0)
+	return f == nil || (len(f.PGNs) == 0 && len(f.ExcludePGNs) == 0 &&
+		len(f.Manufacturers) == 0 && len(f.Instances) == 0 && len(f.Names) == 0)
 }
 
 // Event is a message received from an lplex SSE stream.

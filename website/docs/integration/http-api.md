@@ -20,6 +20,7 @@ Opens an SSE stream of live CAN frames. No session, no replay.
 | Param | Type | Description |
 |---|---|---|
 | `pgn` | uint32 | Filter by PGN (repeatable, OR'd) |
+| `exclude_pgn` | uint32 | Exclude PGN from results (repeatable, OR'd) |
 | `manufacturer` | string | Filter by manufacturer name (repeatable, OR'd) |
 | `instance` | uint8 | Filter by device instance (repeatable, OR'd) |
 | `name` | string | Filter by 64-bit CAN NAME hex (repeatable, OR'd) |
@@ -56,6 +57,7 @@ Create or reconnect a buffered session. The client ID must be 1-64 alphanumeric 
   "buffer_timeout": "PT5M",
   "filter": {
     "pgn": [129025, 130306],
+    "exclude_pgn": [60928],
     "manufacturer": ["Garmin"],
     "instance": [0],
     "name": ["0x00A1B2C3D4E5F600"]

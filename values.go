@@ -13,9 +13,10 @@ import (
 
 // valueFilter holds precomputed filter sets for fast lookup during snapshot iteration.
 type valueFilter struct {
-	pgns    map[uint32]struct{}
-	hasDev  bool // true if any device-based criteria are set
-	devFunc func(src uint8) bool
+	pgns        map[uint32]struct{}
+	excludePGNs map[uint32]struct{}
+	hasDev      bool // true if any device-based criteria are set
+	devFunc     func(src uint8) bool
 }
 
 // newValueFilter builds a valueFilter from an EventFilter and device registry.
@@ -31,6 +32,13 @@ func newValueFilter(f *EventFilter, devices *DeviceRegistry) *valueFilter {
 		vf.pgns = make(map[uint32]struct{}, len(f.PGNs))
 		for _, p := range f.PGNs {
 			vf.pgns[p] = struct{}{}
+		}
+	}
+
+	if len(f.ExcludePGNs) > 0 {
+		vf.excludePGNs = make(map[uint32]struct{}, len(f.ExcludePGNs))
+		for _, p := range f.ExcludePGNs {
+			vf.excludePGNs[p] = struct{}{}
 		}
 	}
 
@@ -125,6 +133,11 @@ func (vs *ValueStore) Snapshot(devices *DeviceRegistry, filter *EventFilter) []D
 	for k, v := range vs.values {
 		if vf != nil && vf.pgns != nil {
 			if _, ok := vf.pgns[k.PGN]; !ok {
+				continue
+			}
+		}
+		if vf != nil && vf.excludePGNs != nil {
+			if _, ok := vf.excludePGNs[k.PGN]; ok {
 				continue
 			}
 		}
@@ -227,6 +240,11 @@ func (vs *ValueStore) DecodedSnapshot(devices *DeviceRegistry, filter *EventFilt
 	for k, v := range vs.values {
 		if vf != nil && vf.pgns != nil {
 			if _, ok := vf.pgns[k.PGN]; !ok {
+				continue
+			}
+		}
+		if vf != nil && vf.excludePGNs != nil {
+			if _, ok := vf.excludePGNs[k.PGN]; ok {
 				continue
 			}
 		}
