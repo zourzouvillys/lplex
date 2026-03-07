@@ -257,13 +257,12 @@ func (p *parser) parseField(tokens []string) (FieldDef, error) {
 	idx++
 
 	// Type (optional for "_" reserved and "?" unknown fields)
-	if f.Name == "_" {
+	switch f.Name {
+	case "_":
 		f.Type = TypeReserved
-		// Next token should be :<bits>
-	} else if f.Name == "?" {
+	case "?":
 		f.Type = TypeUnknown
-		// Next token should be :<bits>
-	} else {
+	default:
 		if idx >= len(tokens) {
 			return FieldDef{}, p.errorf("field %s: missing type", f.Name)
 		}
