@@ -104,3 +104,9 @@ The filter object used in session creation and client libraries:
 ```
 
 All fields are optional. An empty filter (or no filter) matches all frames. `pgn` (include) and `exclude_pgn` can be combined: include is checked first, then exclude.
+
+## Where filtering happens
+
+- **Server-side**: filters are applied on the server (query params for ephemeral, session filter for buffered). This reduces bandwidth since excluded frames are never sent.
+- **Client-side**: lplexdump also applies PGN include/exclude filters locally before displaying frames. This acts as a safety net when the server is an older version that doesn't support all filter parameters.
+- **Journal replay**: all filtering is client-side since there is no server involved.
