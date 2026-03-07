@@ -338,6 +338,11 @@ func (p *parser) parseField(tokens []string) (FieldDef, error) {
 				return FieldDef{}, p.errorf("field %s: group= must be \"map\", got %q", f.Name, mode)
 			}
 			f.GroupMode = mode
+		case "trim":
+			if f.Type != TypeString {
+				return FieldDef{}, p.errorf("field %s: trim= only applies to string fields", f.Name)
+			}
+			f.Trim = unquote(v)
 		case "as":
 			f.AliasPlural = unquote(v)
 		default:
@@ -430,11 +435,23 @@ func tokenize(line string) []string {
 			tokens = append(tokens, line[:end+2])
 			line = strings.TrimSpace(line[end+2:])
 		} else {
-			// Regular token: find next whitespace
-			end := strings.IndexFunc(line, unicode.IsSpace)
-			if end < 0 {
-				tokens = append(tokens, line)
-				break
+			// Regular token: find next whitespace, but respect embedded quoted strings
+			// (e.g. key="value with spaces")
+			end := 0
+			for end < len(line) {
+				if line[end] == '"' {
+					// Skip to closing quote
+					close := strings.IndexByte(line[end+1:], '"')
+					if close < 0 {
+						end = len(line)
+					} else {
+						end += close + 2
+					}
+				} else if unicode.IsSpace(rune(line[end])) {
+					break
+				} else {
+					end++
+				}
 			}
 			tokens = append(tokens, line[:end])
 			line = strings.TrimSpace(line[end:])

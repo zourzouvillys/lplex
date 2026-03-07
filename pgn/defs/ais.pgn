@@ -109,8 +109,8 @@ pgn 129041 "AIS Aids to Navigation Report" fast_packet {
   ais_transceiver_info      AISTransceiver :5
   _                                  :3
   ?                                  :16
-  aton_name                 string  :160
-  aton_name_extension       string  :112
+  aton_name                 string  :160  trim="@ "
+  aton_name_extension       string  :112  trim="@ "
 }
 
 pgn 129792 "AIS DGNSS Broadcast Binary Message" fast_packet
@@ -141,8 +141,8 @@ pgn 129794 "AIS Class A Static and Voyage Related Data" fast_packet {
   repeat_indicator        uint8   :2
   user_id                 uint32  :32
   imo_number              uint32  :32
-  callsign                string  :56
-  name                    string  :160
+  callsign                string  :56   trim="@ "
+  name                    string  :160  trim="@ "
   ship_type               uint8   :8
   ship_length             uint16  :16  scale=0.1    unit="m"
   ship_beam               uint16  :16  scale=0.1    unit="m"
@@ -151,7 +151,7 @@ pgn 129794 "AIS Class A Static and Voyage Related Data" fast_packet {
   eta_date                uint16  :16
   eta_time                uint32  :32  scale=0.0001 unit="s"
   draught                 uint16  :16  scale=0.01   unit="m"
-  destination             string  :160
+  destination             string  :160  trim="@ "
   ais_version_indicator   uint8   :2
   gnss_type               PositionFixType :4
   dte                     uint8   :1
@@ -179,7 +179,7 @@ pgn 129809 "AIS Class B CS Static Data Part A" fast_packet {
   message_id            uint8   :6
   repeat_indicator      uint8   :2
   user_id               uint32  :32
-  name                  string  :160
+  name                  string  :160  trim="@ "
 }
 
 # PGN 129810 — AIS Class B CS Static Data Part B
@@ -188,8 +188,8 @@ pgn 129810 "AIS Class B CS Static Data Part B" fast_packet {
   repeat_indicator      uint8   :2
   user_id               uint32  :32
   ship_type             uint8   :8
-  vendor_id             string  :56
-  callsign              string  :56
+  vendor_id             string  :56   trim="@ "
+  callsign              string  :56   trim="@ "
   ship_length           uint16  :16  scale=0.1    unit="m"
   ship_beam             uint16  :16  scale=0.1    unit="m"
   position_ref_starboard uint16 :16  scale=0.1    unit="m"
