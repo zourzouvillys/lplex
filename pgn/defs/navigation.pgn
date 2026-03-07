@@ -141,8 +141,8 @@ pgn 129026 "COG SOG Rapid Update" interval=250ms {
   sid                  uint8               :8
   cog_reference        HeadingReference    :2
   _                                        :6
-  cog                  uint16              :16  scale=0.0001 unit="rad"
-  sog                  uint16              :16  scale=0.01   unit="m/s"
+  cog                  uint16              :16  scale=0.0001 unit="rad"  tolerance=0.05
+  sog                  uint16              :16  scale=0.01   unit="m/s"  tolerance=0.1
   _                                        :16
 }
 
