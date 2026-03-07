@@ -1,11 +1,140 @@
 # AIS PGNs (all fast-packet)
 
-pgn 129038 "AIS Class A Position Report" fast_packet
-pgn 129039 "AIS Class B Position Report" fast_packet
+enum AISTransceiver {
+  0 = "channel_a_vdl"
+  1 = "channel_b_vdl"
+  2 = "channel_a_coupler"
+  3 = "channel_b_coupler"
+  4 = "own_information"
+}
+
+enum NavStatus {
+  0 = "under_way_using_engine"
+  1 = "at_anchor"
+  2 = "not_under_command"
+  3 = "restricted_manoeuverability"
+  4 = "constrained_by_draught"
+  5 = "moored"
+  6 = "aground"
+  7 = "engaged_in_fishing"
+  8 = "under_way_sailing"
+  14 = "ais_sart"
+  15 = "not_defined"
+}
+
+enum PositionFixType {
+  0 = "undefined"
+  1 = "gps"
+  2 = "glonass"
+  3 = "combined_gps_glonass"
+  4 = "loran_c"
+  5 = "chayka"
+  6 = "integrated_navigation"
+  7 = "surveyed"
+  8 = "galileo"
+}
+
+# PGN 129038 — AIS Class A Position Report
+pgn 129038 "AIS Class A Position Report" fast_packet {
+  message_id            uint8   :6
+  repeat_indicator      uint8   :2
+  user_id               uint32  :32
+  longitude             int32   :32  scale=1e-7   unit="deg"
+  latitude              int32   :32  scale=1e-7   unit="deg"
+  position_accuracy     uint8   :1
+  raim                  uint8   :1
+  time_stamp            uint8   :6
+  cog                   uint16  :16  scale=0.0001 unit="rad"
+  sog                   uint16  :16  scale=0.01   unit="m/s"
+  communication_state   uint32  :19
+  ais_transceiver_info  AISTransceiver :5
+  heading               uint16  :16  scale=0.0001 unit="rad"
+  rate_of_turn          int16   :16  scale=3.125e-5 unit="rad/s"
+  nav_status            NavStatus :4
+  _                              :4
+  sid                   uint8   :8
+}
+
+# PGN 129039 — AIS Class B Position Report
+pgn 129039 "AIS Class B Position Report" fast_packet {
+  message_id            uint8   :6
+  repeat_indicator      uint8   :2
+  user_id               uint32  :32
+  longitude             int32   :32  scale=1e-7   unit="deg"
+  latitude              int32   :32  scale=1e-7   unit="deg"
+  position_accuracy     uint8   :1
+  raim                  uint8   :1
+  time_stamp            uint8   :6
+  cog                   uint16  :16  scale=0.0001 unit="rad"
+  sog                   uint16  :16  scale=0.01   unit="m/s"
+  communication_state   uint32  :19
+  ais_transceiver_info  AISTransceiver :5
+  heading               uint16  :16  scale=0.0001 unit="rad"
+  regional_application  uint8   :8
+  regional_flags        uint8   :2
+  unit_type             uint8   :1
+  integrated_display    uint8   :1
+  dsc_flag              uint8   :1
+  band                  uint8   :1
+  can_handle_msg22      uint8   :1
+  ais_mode              uint8   :1
+  ais_comm_state        uint8   :1
+  _                              :7
+}
+
 pgn 129040 "AIS Class B Extended Position Report" fast_packet
-pgn 129041 "AIS Aids to Navigation Report" fast_packet
+
+# PGN 129041 — AIS Aids to Navigation Report
+pgn 129041 "AIS Aids to Navigation Report" fast_packet {
+  message_id                uint8   :6
+  repeat_indicator          uint8   :2
+  user_id                   uint32  :32
+  longitude                 int32   :32  scale=1e-7   unit="deg"
+  latitude                  int32   :32  scale=1e-7   unit="deg"
+  position_accuracy         uint8   :1
+  raim                      uint8   :1
+  time_stamp                uint8   :6
+  aton_structure_length     uint16  :16  scale=0.1    unit="m"
+  aton_structure_beam       uint16  :16  scale=0.1    unit="m"
+  position_ref_starboard    uint16  :16  scale=0.1    unit="m"
+  position_ref_true_north   uint16  :16  scale=0.1    unit="m"
+  aton_type                 uint8   :5
+  off_position_indicator    uint8   :1
+  virtual_aton_flag         uint8   :1
+  assigned_mode_flag        uint8   :1
+  _                                  :1
+  position_fix_type         PositionFixType :4
+  _                                  :3
+  aton_status               uint8   :8
+  ais_transceiver_info      AISTransceiver :5
+  _                                  :3
+  ?                                  :16
+  aton_name                 string  :160
+  aton_name_extension       string  :112
+}
+
 pgn 129792 "AIS DGNSS Broadcast Binary Message" fast_packet
-pgn 129793 "AIS UTC and Date Report" fast_packet
+
+# PGN 129793 — AIS UTC and Date Report
+pgn 129793 "AIS UTC and Date Report" fast_packet {
+  message_id            uint8   :6
+  repeat_indicator      uint8   :2
+  user_id               uint32  :32
+  longitude             int32   :32  scale=1e-7   unit="deg"
+  latitude              int32   :32  scale=1e-7   unit="deg"
+  position_accuracy     uint8   :1
+  raim                  uint8   :1
+  _                              :6
+  position_time         uint32  :32  scale=0.0001 unit="s"
+  communication_state   uint32  :19
+  ais_transceiver_info  AISTransceiver :5
+  position_date         uint16  :16
+  _                              :4
+  gnss_type             uint8   :4
+  _                              :8
+  _                              :8
+}
+
 pgn 129794 "AIS Class A Static and Voyage Related Data" fast_packet
 pgn 129795 "AIS Addressed Binary Message" fast_packet
 pgn 129796 "AIS Acknowledge" fast_packet
@@ -21,5 +150,29 @@ pgn 129805 "AIS Data Link Management Message" fast_packet
 pgn 129806 "AIS Channel Management" fast_packet
 pgn 129807 "AIS Group Assignment" fast_packet
 pgn 129808 "DSC Call Information" fast_packet
-pgn 129809 "AIS Class B CS Static Data Part A" fast_packet
-pgn 129810 "AIS Class B CS Static Data Part B" fast_packet
+
+# PGN 129809 — AIS Class B CS Static Data Part A
+pgn 129809 "AIS Class B CS Static Data Part A" fast_packet {
+  message_id            uint8   :6
+  repeat_indicator      uint8   :2
+  user_id               uint32  :32
+  name                  string  :160
+}
+
+# PGN 129810 — AIS Class B CS Static Data Part B
+pgn 129810 "AIS Class B CS Static Data Part B" fast_packet {
+  message_id            uint8   :6
+  repeat_indicator      uint8   :2
+  user_id               uint32  :32
+  ship_type             uint8   :8
+  vendor_id             string  :56
+  callsign              string  :56
+  ship_length           uint16  :16  scale=0.1    unit="m"
+  ship_beam             uint16  :16  scale=0.1    unit="m"
+  position_ref_starboard uint16 :16  scale=0.1    unit="m"
+  position_ref_bow      uint16  :16  scale=0.1    unit="m"
+  mothership_mmsi       uint32  :32
+  _                              :2
+  spare                 uint8   :3
+  _                              :3
+}
