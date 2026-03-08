@@ -228,13 +228,10 @@ func (k *JournalKeeper) handleRotation(ctx context.Context, rf RotatedFile) {
 }
 
 // archiveUnarchived is a one-shot startup sweep that archives any .lpj files
-// missing their .archived sidecar marker. Only runs with on-rotate trigger:
-// if the process crashed before on-rotate fired, these files would never be
-// archived otherwise. With before-expire, files get archived naturally at
-// retention time. This runs at startup before any brokers are started, so
-// all files are from previous runs and are complete.
+// missing their .archived sidecar marker. The most recent file in each directory
+// is skipped because it's likely the active journal being written to.
 func (k *JournalKeeper) archiveUnarchived(ctx context.Context) {
-	if k.cfg.ArchiveCommand == "" || k.cfg.ArchiveTrigger != ArchiveOnRotate {
+	if k.cfg.ArchiveCommand == "" {
 		return
 	}
 
@@ -254,6 +251,8 @@ func (k *JournalKeeper) archiveUnarchived(ctx context.Context) {
 			continue
 		}
 
+		// Collect .lpj files sorted by timestamp (oldest first).
+		var files []journalFileInfo
 		for _, e := range entries {
 			name := e.Name()
 			if !strings.HasSuffix(name, ".lpj") {
@@ -264,13 +263,29 @@ func (k *JournalKeeper) archiveUnarchived(ctx context.Context) {
 				continue
 			}
 			path := filepath.Join(d.Dir, name)
-			if !isArchived(path) && !k.isPending(path) {
-				toArchive = append(toArchive, pendingFile{
-					path:       path,
-					instanceID: d.InstanceID,
-					size:       info.Size(),
-					created:    parseTimestampFromFilename(name),
-				})
+			files = append(files, journalFileInfo{
+				path:       path,
+				instanceID: d.InstanceID,
+				size:       info.Size(),
+				created:    parseTimestampFromFilename(name),
+				archived:   isArchived(path),
+			})
+		}
+
+		slices.SortFunc(files, func(a, b journalFileInfo) int {
+			return a.created.Compare(b.created)
+		})
+
+		if len(files) == 0 {
+			continue
+		}
+
+		// Skip the newest file (likely the active journal).
+		candidates := files[:len(files)-1]
+
+		for _, f := range candidates {
+			if !f.archived && !k.isPending(f.path) {
+				toArchive = append(toArchive, makePending(f))
 			}
 		}
 	}
