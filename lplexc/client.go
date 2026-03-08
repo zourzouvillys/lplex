@@ -303,5 +303,8 @@ func filterQueryParams(f *Filter) string {
 	for _, n := range f.Names {
 		v.Add("name", n)
 	}
+	for _, n := range f.ExcludeNames {
+		v.Add("exclude_name", n)
+	}
 	return v.Encode()
 }

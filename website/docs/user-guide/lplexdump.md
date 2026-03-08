@@ -46,6 +46,7 @@ lplexdump -server http://inuc1.local:8089 -decode
 | `-start` | (empty) | Seek to this time (RFC 3339) before playing |
 | `-pgn` | (all) | Filter by PGN number (repeatable) |
 | `-exclude-pgn` | (none) | Exclude specific PGN from output (repeatable) |
+| `-exclude-name` | (none) | Exclude device by 64-bit CAN NAME hex (repeatable) |
 | `-manufacturer` | (all) | Filter by manufacturer name (repeatable) |
 | `-instance` | (all) | Filter by device instance (repeatable) |
 | `-name` | (all) | Filter by 64-bit CAN NAME hex (repeatable) |
@@ -100,6 +101,9 @@ mdns-timeout = 5s
 # PGNs to exclude globally (applies to all boats)
 exclude-pgn = [60928, 126996]
 
+# CAN NAMEs to exclude globally (hex, applies to all boats)
+exclude-name = ["00A1B2C3D4E5F600"]
+
 boats {
   sv-dockwise {
     # mDNS instance name (matches the hostname lplex registers)
@@ -108,6 +112,8 @@ boats {
     cloud = "https://lplex.dockwise.app/instances/sv-dockwise"
     # additional PGNs to exclude for this boat (additive with global)
     exclude-pgn = [129029]
+    # additional CAN NAMEs to exclude for this boat (additive with global)
+    exclude-name = ["00DEADBEEFCAFE00"]
   }
 
   test-bench {
@@ -121,11 +127,13 @@ boats {
 |---|---|---|
 | `mdns-timeout` | `3s` | How long to wait for mDNS discovery before falling back to cloud |
 | `exclude-pgn` | | PGNs to exclude globally, applies to all boats. Array or single value. |
+| `exclude-name` | | CAN NAMEs (hex) to exclude globally, applies to all boats. Array or single value. |
 | `boats.<name>.mdns` | | mDNS instance name to look for (matches the hostname lplex registers) |
 | `boats.<name>.cloud` | | Cloud fallback URL (full base URL including instance path) |
 | `boats.<name>.exclude-pgn` | | PGNs to exclude for this boat, additive with the global list. Array or single value. |
+| `boats.<name>.exclude-name` | | CAN NAMEs (hex) to exclude for this boat, additive with the global list. Array or single value. |
 
-Global, per-boat, and CLI `-exclude-pgn` flags are all additive. For example, with the config above, connecting to `sv-dockwise` would exclude PGNs 60928, 126996, and 129029. Adding `-exclude-pgn 130312` on the command line would also exclude 130312.
+Global, per-boat, and CLI exclusion flags (`-exclude-pgn`, `-exclude-name`) are all additive. For example, with the config above, connecting to `sv-dockwise` would exclude PGNs 60928, 126996, and 129029, plus CAN NAMEs `00A1B2C3D4E5F600` and `00DEADBEEFCAFE00`. Adding `-exclude-pgn 130312` on the command line would also exclude that PGN.
 
 ### Connection flow
 

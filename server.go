@@ -78,6 +78,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			Manufacturer []string `json:"manufacturer"`
 			Instance     []uint8  `json:"instance"`
 			Name         []string `json:"name"`
+			ExcludeName  []string `json:"exclude_name"`
 		} `json:"filter"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -110,6 +111,14 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			filter.Names = append(filter.Names, name)
+		}
+		for _, nameHex := range req.Filter.ExcludeName {
+			name, err := strconv.ParseUint(nameHex, 16, 64)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("invalid exclude CAN name %q: must be hex", nameHex), http.StatusBadRequest)
+				return
+			}
+			filter.ExcludeNames = append(filter.ExcludeNames, name)
 		}
 	}
 
@@ -235,8 +244,9 @@ func ParseFilterParams(r *http.Request) (*EventFilter, error) {
 	manufacturers := q["manufacturer"]
 	instances := q["instance"]
 	names := q["name"]
+	excludeNames := q["exclude_name"]
 
-	if len(pgns) == 0 && len(excludePGNs) == 0 && len(manufacturers) == 0 && len(instances) == 0 && len(names) == 0 {
+	if len(pgns) == 0 && len(excludePGNs) == 0 && len(manufacturers) == 0 && len(instances) == 0 && len(names) == 0 && len(excludeNames) == 0 {
 		return nil, nil
 	}
 
@@ -274,6 +284,14 @@ func ParseFilterParams(r *http.Request) (*EventFilter, error) {
 			return nil, fmt.Errorf("invalid name %q: must be hex", s)
 		}
 		f.Names = append(f.Names, v)
+	}
+
+	for _, s := range excludeNames {
+		v, err := strconv.ParseUint(s, 16, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid exclude_name %q: must be hex", s)
+		}
+		f.ExcludeNames = append(f.ExcludeNames, v)
 	}
 
 	if f.IsEmpty() {

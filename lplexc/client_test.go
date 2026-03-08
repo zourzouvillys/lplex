@@ -402,6 +402,7 @@ func TestFilterQueryParams(t *testing.T) {
 		PGNs:          []uint32{129025, 130306},
 		ExcludePGNs:   []uint32{60928, 126996},
 		Manufacturers: []string{"Garmin"},
+		ExcludeNames:  []string{"00A1B2C3D4E5F600"},
 	}
 	params := filterQueryParams(f)
 	if params == "" {
@@ -413,6 +414,7 @@ func TestFilterQueryParams(t *testing.T) {
 		"exclude_pgn=60928",
 		"exclude_pgn=126996",
 		"manufacturer=Garmin",
+		"exclude_name=00A1B2C3D4E5F600",
 	} {
 		if !containsSubstring(params, want) {
 			t.Errorf("missing %q in %q", want, params)
@@ -427,6 +429,7 @@ func TestFilterSessionJSON(t *testing.T) {
 		Manufacturers: []string{"Garmin"},
 		Instances:     []uint8{2},
 		Names:         []string{"deadbeef"},
+		ExcludeNames:  []string{"00A1B2C3D4E5F600"},
 	}
 	m := filterSessionJSON(f)
 
@@ -458,6 +461,12 @@ func TestFilterSessionJSON(t *testing.T) {
 		t.Error("missing name")
 	} else if got := names.([]string); len(got) != 1 || got[0] != "deadbeef" {
 		t.Errorf("name = %v, want [deadbeef]", got)
+	}
+
+	if en, ok := m["exclude_name"]; !ok {
+		t.Error("missing exclude_name")
+	} else if got := en.([]string); len(got) != 1 || got[0] != "00A1B2C3D4E5F600" {
+		t.Errorf("exclude_name = %v, want [00A1B2C3D4E5F600]", got)
 	}
 }
 

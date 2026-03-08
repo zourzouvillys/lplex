@@ -90,11 +90,13 @@ func main() {
 	var filterManufacturers stringSlice
 	var filterInstances uintSlice
 	var filterNames stringSlice
+	var excludeNames stringSlice
 	flag.Var(&filterPGNs, "pgn", "filter by PGN (repeatable)")
 	flag.Var(&excludePGNs, "exclude-pgn", "exclude PGN from output (repeatable)")
 	flag.Var(&filterManufacturers, "manufacturer", "filter by manufacturer name (repeatable)")
 	flag.Var(&filterInstances, "instance", "filter by device instance (repeatable)")
 	flag.Var(&filterNames, "name", "filter by 64-bit CAN NAME in hex (repeatable)")
+	flag.Var(&excludeNames, "exclude-name", "exclude device by 64-bit CAN NAME in hex (repeatable)")
 	whereExpr := flag.String("where", "", `display filter expression (e.g. "water_temperature < 280")`)
 
 	flag.Parse()
@@ -152,7 +154,7 @@ func main() {
 		defer cancel()
 
 		devices := newDeviceMap()
-		if err := runReplay(ctx, *filePath, *speed, *startTime, *jsonMode, *decode, *changes, filterPGNs, excludePGNs, filterManufacturers, filterInstances, filterNames, displayFilter, devices); err != nil {
+		if err := runReplay(ctx, *filePath, *speed, *startTime, *jsonMode, *decode, *changes, filterPGNs, excludePGNs, filterManufacturers, filterInstances, filterNames, excludeNames, displayFilter, devices); err != nil {
 			fmt.Fprintf(os.Stderr, "replay error: %v\n", err)
 			os.Exit(1)
 		}
@@ -192,10 +194,11 @@ func main() {
 		}
 		mdnsTimeout = dc.MDNSTimeout
 
-		// Merge global exclude-pgn from config into CLI flags.
+		// Merge global config exclusions into CLI flags.
 		for _, p := range dc.ExcludePGNs {
 			excludePGNs = append(excludePGNs, uint(p))
 		}
+		excludeNames = append(excludeNames, dc.ExcludeNames...)
 
 		if boatSet {
 			bc, err := resolveBoat(*boatName, dc.Boats)
@@ -205,10 +208,11 @@ func main() {
 			}
 			boat = &bc
 
-			// Merge per-boat exclude-pgn from config into CLI flags.
+			// Merge per-boat config exclusions into CLI flags.
 			for _, p := range bc.ExcludePGNs {
 				excludePGNs = append(excludePGNs, uint(p))
 			}
+			excludeNames = append(excludeNames, bc.ExcludeNames...)
 		}
 	}
 
@@ -281,7 +285,7 @@ func main() {
 	devices := newDeviceMap()
 	var lastSeq atomic.Uint64
 
-	filter := buildFilter(filterPGNs, excludePGNs, filterManufacturers, filterInstances, filterNames)
+	filter := buildFilter(filterPGNs, excludePGNs, filterManufacturers, filterInstances, filterNames, excludeNames)
 	buffered := *bufferTimeout != ""
 
 	for {
@@ -328,13 +332,14 @@ func main() {
 	}
 }
 
-func buildFilter(pgns uintSlice, excludePGNs uintSlice, manufacturers stringSlice, instances uintSlice, names stringSlice) *lplexc.Filter {
-	if len(pgns) == 0 && len(excludePGNs) == 0 && len(manufacturers) == 0 && len(instances) == 0 && len(names) == 0 {
+func buildFilter(pgns uintSlice, excludePGNs uintSlice, manufacturers stringSlice, instances uintSlice, names stringSlice, excludeNameList stringSlice) *lplexc.Filter {
+	if len(pgns) == 0 && len(excludePGNs) == 0 && len(manufacturers) == 0 && len(instances) == 0 && len(names) == 0 && len(excludeNameList) == 0 {
 		return nil
 	}
 	f := &lplexc.Filter{
 		Manufacturers: []string(manufacturers),
 		Names:         []string(names),
+		ExcludeNames:  []string(excludeNameList),
 	}
 	for _, p := range pgns {
 		f.PGNs = append(f.PGNs, uint32(p))
@@ -549,7 +554,7 @@ func runInspect(path string) error {
 // Journal replay
 // ---------------------------------------------------------------------------
 
-func runReplay(ctx context.Context, path string, speed float64, startTimeStr string, jsonMode, decode, changes bool, pgns uintSlice, excludePGNs uintSlice, manufacturers stringSlice, instances uintSlice, names stringSlice, df *filter.Filter, devices *deviceMap) error {
+func runReplay(ctx context.Context, path string, speed float64, startTimeStr string, jsonMode, decode, changes bool, pgns uintSlice, excludePGNs uintSlice, manufacturers stringSlice, instances uintSlice, names stringSlice, excludeNames stringSlice, df *filter.Filter, devices *deviceMap) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open journal: %w", err)
@@ -626,7 +631,7 @@ func runReplay(ctx context.Context, path string, speed float64, startTimeStr str
 		lastTs = entry.Timestamp
 
 		// Client-side filtering.
-		if !matchesReplayFilter(entry, devices, pgns, excludePGNs, manufacturers, instances, names) {
+		if !matchesReplayFilter(entry, devices, pgns, excludePGNs, manufacturers, instances, names, excludeNames) {
 			prevTs = entry.Timestamp
 			continue
 		}
@@ -743,8 +748,8 @@ func entryToFrame(entry journal.Entry, seq uint64) lplexc.Frame {
 
 // matchesReplayFilter applies client-side filters to a journal entry.
 // Categories are AND'd, values within a category are OR'd.
-func matchesReplayFilter(entry journal.Entry, devices *deviceMap, pgns uintSlice, excludePGNs uintSlice, manufacturers stringSlice, instances uintSlice, names stringSlice) bool {
-	if len(pgns) == 0 && len(excludePGNs) == 0 && len(manufacturers) == 0 && len(instances) == 0 && len(names) == 0 {
+func matchesReplayFilter(entry journal.Entry, devices *deviceMap, pgns uintSlice, excludePGNs uintSlice, manufacturers stringSlice, instances uintSlice, names stringSlice, excludeNameList stringSlice) bool {
+	if len(pgns) == 0 && len(excludePGNs) == 0 && len(manufacturers) == 0 && len(instances) == 0 && len(names) == 0 && len(excludeNameList) == 0 {
 		return true
 	}
 
@@ -765,6 +770,17 @@ func matchesReplayFilter(entry journal.Entry, devices *deviceMap, pgns uintSlice
 		for _, pgn := range excludePGNs {
 			if uint32(pgn) == entry.Header.PGN {
 				return false
+			}
+		}
+	}
+
+	if len(excludeNameList) > 0 {
+		dev, ok := devices.get(entry.Header.Source)
+		if ok {
+			for _, n := range excludeNameList {
+				if strings.EqualFold(dev.Name, n) {
+					return false
+				}
 			}
 		}
 	}

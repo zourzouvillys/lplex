@@ -41,12 +41,14 @@ type Filter struct {
 	Manufacturers []string `json:"manufacturer,omitempty"`
 	Instances     []uint8  `json:"instance,omitempty"`
 	Names         []string `json:"name,omitempty"`
+	ExcludeNames  []string `json:"exclude_name,omitempty"`
 }
 
 // IsEmpty returns true if no filter criteria are set.
 func (f *Filter) IsEmpty() bool {
 	return f == nil || (len(f.PGNs) == 0 && len(f.ExcludePGNs) == 0 &&
-		len(f.Manufacturers) == 0 && len(f.Instances) == 0 && len(f.Names) == 0)
+		len(f.Manufacturers) == 0 && len(f.Instances) == 0 &&
+		len(f.Names) == 0 && len(f.ExcludeNames) == 0)
 }
 
 // PGNValue is a single PGN's last-known value.

@@ -177,3 +177,103 @@ boats {
 		t.Fatal("expected error for invalid boat exclude-pgn")
 	}
 }
+
+func TestLoadConfig_GlobalExcludeName(t *testing.T) {
+	path := writeConfig(t, `
+exclude-name = ["00A1B2C3D4E5F600", "00DEADBEEFCAFE00"]
+
+boats {
+  test {
+    mdns = "test1"
+  }
+}
+`)
+	dc, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"00A1B2C3D4E5F600", "00DEADBEEFCAFE00"}
+	if len(dc.ExcludeNames) != len(want) {
+		t.Fatalf("global ExcludeNames = %v, want %v", dc.ExcludeNames, want)
+	}
+	for i, v := range want {
+		if dc.ExcludeNames[i] != v {
+			t.Errorf("global ExcludeNames[%d] = %q, want %q", i, dc.ExcludeNames[i], v)
+		}
+	}
+}
+
+func TestLoadConfig_PerBoatExcludeName(t *testing.T) {
+	path := writeConfig(t, `
+boats {
+  sv-dockwise {
+    mdns = "inuc1"
+    exclude-name = ["00A1B2C3D4E5F600"]
+  }
+  test-bench {
+    mdns = "testpi"
+  }
+}
+`)
+	dc, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bc := dc.Boats["sv-dockwise"]
+	if len(bc.ExcludeNames) != 1 || bc.ExcludeNames[0] != "00A1B2C3D4E5F600" {
+		t.Errorf("sv-dockwise ExcludeNames = %v, want [00A1B2C3D4E5F600]", bc.ExcludeNames)
+	}
+	if dc.Boats["test-bench"].ExcludeNames != nil {
+		t.Errorf("test-bench ExcludeNames = %v, want nil", dc.Boats["test-bench"].ExcludeNames)
+	}
+}
+
+func TestLoadConfig_GlobalAndPerBoatExcludeName(t *testing.T) {
+	path := writeConfig(t, `
+exclude-name = ["00DEADBEEFCAFE00"]
+
+boats {
+  sv-dockwise {
+    mdns = "inuc1"
+    exclude-name = ["00A1B2C3D4E5F600"]
+  }
+}
+`)
+	dc, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(dc.ExcludeNames) != 1 || dc.ExcludeNames[0] != "00DEADBEEFCAFE00" {
+		t.Errorf("global ExcludeNames = %v, want [00DEADBEEFCAFE00]", dc.ExcludeNames)
+	}
+	bc := dc.Boats["sv-dockwise"]
+	if len(bc.ExcludeNames) != 1 || bc.ExcludeNames[0] != "00A1B2C3D4E5F600" {
+		t.Errorf("sv-dockwise ExcludeNames = %v, want [00A1B2C3D4E5F600]", bc.ExcludeNames)
+	}
+}
+
+func TestLoadConfig_SingleExcludeName(t *testing.T) {
+	path := writeConfig(t, `
+exclude-name = "00DEADBEEFCAFE00"
+
+boats {
+  test {
+    mdns = "test1"
+    exclude-name = "00A1B2C3D4E5F600"
+  }
+}
+`)
+	dc, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(dc.ExcludeNames) != 1 || dc.ExcludeNames[0] != "00DEADBEEFCAFE00" {
+		t.Errorf("global ExcludeNames = %v, want [00DEADBEEFCAFE00]", dc.ExcludeNames)
+	}
+	if len(dc.Boats["test"].ExcludeNames) != 1 || dc.Boats["test"].ExcludeNames[0] != "00A1B2C3D4E5F600" {
+		t.Errorf("test ExcludeNames = %v, want [00A1B2C3D4E5F600]", dc.Boats["test"].ExcludeNames)
+	}
+}
