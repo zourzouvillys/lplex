@@ -168,6 +168,10 @@ lplexdump -server http://inuc1.local:8089 -pgn 129025 -manufacturer Garmin
 # Decode known PGNs into human-readable fields
 lplexdump -decode
 
+# Filter on decoded field values (auto-enables -decode)
+lplexdump -where "pgn == 130310 && water_temperature < 280"
+lplexdump -where 'register.name == "State of Charge"'
+
 # Only show frames with significant changes (suppress sensor noise)
 lplexdump -changes -decode
 

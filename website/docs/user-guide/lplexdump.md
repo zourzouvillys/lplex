@@ -38,6 +38,7 @@ lplexdump -server http://inuc1.local:8089 -decode
 | `-quiet` | `false` | Suppress stderr status messages |
 | `-json` | `false` | Force JSON output (auto-enabled when piped) |
 | `-decode` | `false` | Decode known PGNs into field values |
+| `-where` | (empty) | Display filter expression on decoded fields (auto-enables `-decode`) |
 | `-changes` | `false` | Only show frames with changed data (suppress duplicates within tolerance) |
 | `-file` | (empty) | Replay a `.lpj` journal file instead of connecting |
 | `-inspect` | `false` | Inspect journal file structure and exit |
@@ -179,6 +180,39 @@ lplexdump -pgn 129025 -pgn 129026 -manufacturer Garmin
 ```
 
 See [Filtering](/user-guide/filtering) for details.
+
+## Display filter expressions
+
+The `-where` flag evaluates expressions against decoded PGN fields, letting you filter on actual data values rather than just PGN numbers or source addresses. It automatically enables `-decode` when the expression references decoded fields.
+
+```bash
+# Water temperature below 280K (~7C)
+lplexdump -where "pgn == 130310 && water_temperature < 280"
+
+# Victron register by numeric ID
+lplexdump -where "pgn == 61184 && register == 60813"
+
+# Victron register by human-readable lookup name
+lplexdump -where 'register.name == "State of Charge"'
+
+# Combine with journal replay
+lplexdump -file recording.lpj -where "pgn == 130306 && wind_speed > 15"
+```
+
+### Expression syntax
+
+Expressions support comparison operators (`==`, `!=`, `<`, `>`, `<=`, `>=`), boolean logic (`&&`/`and`, `||`/`or`, `!`/`not`), and parenthesized grouping. Standard operator precedence applies: `!` binds tightest, then `&&`, then `||`.
+
+**Field types:**
+- **Header fields** (always available): `pgn`, `src`, `dst`, `prio`
+- **Decoded struct fields** (by JSON tag name): `water_temperature`, `register`, `wind_speed`, `engine_speed`
+- **Lookup sub-accessor**: `register.name` resolves via `LookupFields()` to the human-readable name
+
+**Value types:** integers (`130310`), floats (`280.5`), strings (`"State of Charge"`, single or double quotes)
+
+### Interaction with other filters
+
+`-where` runs after PGN/manufacturer/instance filters. Use the existing flags for coarse filtering and `-where` for fine-grained field-value selection. If a frame's PGN has no decoder or the referenced field doesn't exist, the comparison evaluates to false (the frame is excluded).
 
 ## Change tracking
 

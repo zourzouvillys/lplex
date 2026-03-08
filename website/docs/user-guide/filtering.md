@@ -105,8 +105,22 @@ The filter object used in session creation and client libraries:
 
 All fields are optional. An empty filter (or no filter) matches all frames. `pgn` (include) and `exclude_pgn` can be combined: include is checked first, then exclude.
 
+## Display filter expressions
+
+For field-level filtering on decoded PGN values, use lplexdump's `-where` flag:
+
+```bash
+# Only frames where water temperature is below 280K
+lplexdump -where "pgn == 130310 && water_temperature < 280"
+
+# Filter by lookup name
+lplexdump -where 'register.name == "State of Charge"'
+```
+
+`-where` is a client-side display filter that evaluates after all other filters (PGN, manufacturer, etc.) have been applied. It automatically enables `-decode`. See [lplexdump: Display filter expressions](/user-guide/lplexdump#display-filter-expressions) for the full syntax.
+
 ## Where filtering happens
 
 - **Server-side**: filters are applied on the server (query params for ephemeral, session filter for buffered). This reduces bandwidth since excluded frames are never sent.
-- **Client-side**: lplexdump also applies PGN include/exclude filters locally before displaying frames. This acts as a safety net when the server is an older version that doesn't support all filter parameters.
+- **Client-side**: lplexdump also applies PGN include/exclude filters locally before displaying frames. This acts as a safety net when the server is an older version that doesn't support all filter parameters. The `-where` display filter runs after client-side PGN filters.
 - **Journal replay**: all filtering is client-side since there is no server involved.

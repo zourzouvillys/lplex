@@ -22,6 +22,7 @@ import (
 
 	"github.com/sixfathoms/lplex"
 	"github.com/sixfathoms/lplex/canbus"
+	"github.com/sixfathoms/lplex/filter"
 	"github.com/sixfathoms/lplex/journal"
 	"github.com/sixfathoms/lplex/lplexc"
 	"github.com/sixfathoms/lplex/pgn"
@@ -94,6 +95,7 @@ func main() {
 	flag.Var(&filterManufacturers, "manufacturer", "filter by manufacturer name (repeatable)")
 	flag.Var(&filterInstances, "instance", "filter by device instance (repeatable)")
 	flag.Var(&filterNames, "name", "filter by 64-bit CAN NAME in hex (repeatable)")
+	whereExpr := flag.String("where", "", `display filter expression (e.g. "water_temperature < 280")`)
 
 	flag.Parse()
 
@@ -112,6 +114,20 @@ func main() {
 		log.SetOutput(os.Stderr)
 	}
 	log.SetFlags(log.Ltime)
+
+	// Compile display filter expression.
+	var displayFilter *filter.Filter
+	if *whereExpr != "" {
+		var err error
+		displayFilter, err = filter.Compile(*whereExpr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid -where expression: %v\n", err)
+			os.Exit(1)
+		}
+		if displayFilter.NeedsDecode() {
+			*decode = true
+		}
+	}
 
 	// Journal inspect mode.
 	if *inspect {
@@ -136,7 +152,7 @@ func main() {
 		defer cancel()
 
 		devices := newDeviceMap()
-		if err := runReplay(ctx, *filePath, *speed, *startTime, *jsonMode, *decode, *changes, filterPGNs, excludePGNs, filterManufacturers, filterInstances, filterNames, devices); err != nil {
+		if err := runReplay(ctx, *filePath, *speed, *startTime, *jsonMode, *decode, *changes, filterPGNs, excludePGNs, filterManufacturers, filterInstances, filterNames, displayFilter, devices); err != nil {
 			fmt.Fprintf(os.Stderr, "replay error: %v\n", err)
 			os.Exit(1)
 		}
@@ -260,9 +276,9 @@ func main() {
 	for {
 		var err error
 		if buffered {
-			err = runBuffered(ctx, client, *clientID, *bufferTimeout, *ackInterval, *jsonMode, *decode, *changes, filter, devices, &lastSeq)
+			err = runBuffered(ctx, client, *clientID, *bufferTimeout, *ackInterval, *jsonMode, *decode, *changes, filter, displayFilter, devices, &lastSeq)
 		} else {
-			err = runEphemeral(ctx, client, *jsonMode, *decode, *changes, filter, devices, &lastSeq)
+			err = runEphemeral(ctx, client, *jsonMode, *decode, *changes, filter, displayFilter, devices, &lastSeq)
 		}
 		if ctx.Err() != nil {
 			if buffered {
@@ -522,7 +538,7 @@ func runInspect(path string) error {
 // Journal replay
 // ---------------------------------------------------------------------------
 
-func runReplay(ctx context.Context, path string, speed float64, startTimeStr string, jsonMode, decode, changes bool, pgns uintSlice, excludePGNs uintSlice, manufacturers stringSlice, instances uintSlice, names stringSlice, devices *deviceMap) error {
+func runReplay(ctx context.Context, path string, speed float64, startTimeStr string, jsonMode, decode, changes bool, pgns uintSlice, excludePGNs uintSlice, manufacturers stringSlice, instances uintSlice, names stringSlice, df *filter.Filter, devices *deviceMap) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open journal: %w", err)
@@ -644,10 +660,19 @@ func runReplay(ctx context.Context, path string, speed float64, startTimeStr str
 			}
 		}
 
+		// Decode early for display filter evaluation, reuse for display.
+		var rawDecoded any
+		if decode || df != nil {
+			rawDecoded, _ = decodeFrameRaw(&fr)
+		}
+		if !matchesDisplayFilter(df, &fr, rawDecoded) {
+			continue
+		}
+
 		if jsonMode {
-			writeJSONFrame(out, &fr, decode, ct, diffBytes, fullBytes)
+			writeJSONFrame(out, &fr, decode, rawDecoded, ct, diffBytes, fullBytes)
 		} else {
-			formatFrame(out, &fr, devices, decode, ct, diffBytes, fullBytes)
+			formatFrame(out, &fr, devices, decode, rawDecoded, ct, diffBytes, fullBytes)
 		}
 		out.Flush()
 	}
@@ -799,7 +824,7 @@ func ackFinal(client *lplexc.Client, clientID string, seq uint64) {
 	log.Printf("bye")
 }
 
-func runEphemeral(ctx context.Context, client *lplexc.Client, jsonMode, decode, changes bool, filter *lplexc.Filter, devices *deviceMap, lastSeq *atomic.Uint64) error {
+func runEphemeral(ctx context.Context, client *lplexc.Client, jsonMode, decode, changes bool, filter *lplexc.Filter, df *filter.Filter, devices *deviceMap, lastSeq *atomic.Uint64) error {
 	// Fetch devices for display.
 	devs, err := client.Devices(ctx)
 	if err == nil && len(devs) > 0 {
@@ -817,10 +842,10 @@ func runEphemeral(ctx context.Context, client *lplexc.Client, jsonMode, decode, 
 
 	log.Printf("streaming (ephemeral)")
 
-	return streamEvents(sub, jsonMode, decode, changes, filter, devices, lastSeq)
+	return streamEvents(sub, jsonMode, decode, changes, filter, df, devices, lastSeq)
 }
 
-func runBuffered(ctx context.Context, client *lplexc.Client, clientID, bufferTimeout string, ackInterval time.Duration, jsonMode, decode, changes bool, filter *lplexc.Filter, devices *deviceMap, lastSeq *atomic.Uint64) error {
+func runBuffered(ctx context.Context, client *lplexc.Client, clientID, bufferTimeout string, ackInterval time.Duration, jsonMode, decode, changes bool, filter *lplexc.Filter, df *filter.Filter, devices *deviceMap, lastSeq *atomic.Uint64) error {
 	session, err := client.CreateSession(ctx, lplexc.SessionConfig{
 		ClientID:      clientID,
 		BufferTimeout: bufferTimeout,
@@ -874,7 +899,7 @@ func runBuffered(ctx context.Context, client *lplexc.Client, clientID, bufferTim
 		}
 	})
 
-	err = streamEvents(sub, jsonMode, decode, changes, filter, devices, lastSeq)
+	err = streamEvents(sub, jsonMode, decode, changes, filter, df, devices, lastSeq)
 
 	ackCancel()
 	wg.Wait()
@@ -882,7 +907,7 @@ func runBuffered(ctx context.Context, client *lplexc.Client, clientID, bufferTim
 	return err
 }
 
-func streamEvents(sub *lplexc.Subscription, jsonMode, decode, changes bool, filter *lplexc.Filter, devices *deviceMap, lastSeq *atomic.Uint64) error {
+func streamEvents(sub *lplexc.Subscription, jsonMode, decode, changes bool, filter *lplexc.Filter, df *filter.Filter, devices *deviceMap, lastSeq *atomic.Uint64) error {
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 
@@ -972,10 +997,19 @@ func streamEvents(sub *lplexc.Subscription, jsonMode, decode, changes bool, filt
 				}
 			}
 
+			// Decode early for display filter evaluation, reuse for display.
+			var rawDecoded any
+			if decode || df != nil {
+				rawDecoded, _ = decodeFrameRaw(ev.Frame)
+			}
+			if !matchesDisplayFilter(df, ev.Frame, rawDecoded) {
+				continue
+			}
+
 			if jsonMode {
-				writeJSONFrame(out, ev.Frame, decode, ct, diffBytes, fullBytes)
+				writeJSONFrame(out, ev.Frame, decode, rawDecoded, ct, diffBytes, fullBytes)
 			} else {
-				formatFrame(out, ev.Frame, devices, decode, ct, diffBytes, fullBytes)
+				formatFrame(out, ev.Frame, devices, decode, rawDecoded, ct, diffBytes, fullBytes)
 			}
 			out.Flush()
 		}
@@ -1026,7 +1060,7 @@ func changeTag(ct lplex.ChangeEventType, diffBytes, fullBytes int) string {
 	}
 }
 
-func formatFrame(w *bufio.Writer, f *lplexc.Frame, dm *deviceMap, decode bool, ct lplex.ChangeEventType, diffBytes, fullBytes int) {
+func formatFrame(w *bufio.Writer, f *lplexc.Frame, dm *deviceMap, decode bool, preDecoded any, ct lplex.ChangeEventType, diffBytes, fullBytes int) {
 	ts := f.Ts
 	if t, err := time.Parse(time.RFC3339Nano, f.Ts); err == nil {
 		ts = t.Local().Format("15:04:05.000")
@@ -1064,14 +1098,21 @@ func formatFrame(w *bufio.Writer, f *lplexc.Frame, dm *deviceMap, decode bool, c
 		)
 		return
 	}
-	decoded, err := decodeFrame(f)
-	if err != nil {
-		fmt.Fprintf(w, " %sp%d%s  %s  %s%s%s\n",
-			ansiDim, f.Prio, ansiReset,
-			f.Data,
-			ansiRed, err.Error(), ansiReset,
-		)
-		return
+	// Use pre-decoded value if available, otherwise decode fresh.
+	var decoded any
+	if preDecoded != nil {
+		decoded = withLookupNames(preDecoded)
+	} else {
+		var err error
+		decoded, err = decodeFrame(f)
+		if err != nil {
+			fmt.Fprintf(w, " %sp%d%s  %s  %s%s%s\n",
+				ansiDim, f.Prio, ansiReset,
+				f.Data,
+				ansiRed, err.Error(), ansiReset,
+			)
+			return
+		}
 	}
 	if decoded == nil {
 		fmt.Fprintf(w, " %sp%d%s  %s\n",
@@ -1104,6 +1145,32 @@ func decodeFrame(f *lplexc.Frame) (any, error) {
 		return nil, err
 	}
 	return withLookupNames(v), nil
+}
+
+// decodeFrameRaw decodes a frame's hex data using the pgn.Registry, returning
+// the raw decoded struct without lookup name wrapping.
+func decodeFrameRaw(f *lplexc.Frame) (any, error) {
+	info, ok := pgn.Registry[f.PGN]
+	if !ok || info.Decode == nil {
+		return nil, nil
+	}
+	data, err := hex.DecodeString(f.Data)
+	if err != nil {
+		return nil, err
+	}
+	return info.Decode(data)
+}
+
+// matchesDisplayFilter evaluates a display filter against a frame with optional decoded data.
+func matchesDisplayFilter(df *filter.Filter, f *lplexc.Frame, decoded any) bool {
+	if df == nil {
+		return true
+	}
+	ctx := &filter.EvalContext{PGN: f.PGN, Src: f.Src, Dst: f.Dst, Prio: f.Prio, Decoded: decoded}
+	if lf, ok := decoded.(lookupFielder); ok {
+		ctx.Lookups = lf.LookupFields()
+	}
+	return df.Match(ctx)
 }
 
 // lookupFielder is implemented by generated PGN structs that have lookup= fields.
@@ -1157,7 +1224,7 @@ func (a *annotatedDecoded) MarshalJSON() ([]byte, error) {
 }
 
 // writeJSONFrame writes a frame as a JSON line, optionally with decoded fields.
-func writeJSONFrame(w *bufio.Writer, f *lplexc.Frame, decode bool, ct lplex.ChangeEventType, diffBytes, fullBytes int) {
+func writeJSONFrame(w *bufio.Writer, f *lplexc.Frame, decode bool, preDecoded any, ct lplex.ChangeEventType, diffBytes, fullBytes int) {
 	if !decode && ct == 0 {
 		fmt.Fprintf(w, "{\"seq\":%d,\"ts\":\"%s\",\"prio\":%d,\"pgn\":%d,\"src\":%d,\"dst\":%d,\"data\":\"%s\"}\n",
 			f.Seq, f.Ts, f.Prio, f.PGN, f.Src, f.Dst, f.Data)
@@ -1189,7 +1256,9 @@ func writeJSONFrame(w *bufio.Writer, f *lplexc.Frame, decode bool, ct lplex.Chan
 		jf.FullBytes = fullBytes
 	}
 	if decode {
-		if v, err := decodeFrame(f); err != nil {
+		if preDecoded != nil {
+			jf.Decoded = withLookupNames(preDecoded)
+		} else if v, err := decodeFrame(f); err != nil {
 			jf.DecodeError = err.Error()
 		} else if v != nil {
 			jf.Decoded = v
