@@ -173,9 +173,12 @@ func main() {
 	case <-ctx.Done():
 	}
 
-	cancel()
+	// Order matters: stop servers first (no new connections), then stop
+	// brokers (fires OnRotate via journal finalize), then stop the keeper
+	// (drains remaining rotation notifications before exiting).
 	shutdown()
 	im.Shutdown()
+	cancel()
 	wg.Wait()
 	logger.Info("lplex-cloud stopped")
 }

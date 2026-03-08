@@ -42,6 +42,7 @@ type InstanceState struct {
 	journalDir     string
 	journalCh      chan RxFrame        // connects broker to its JournalWriter
 	journalWriter  *JournalWriter      // live journal writer (nil when broker not running)
+	journalDone    chan struct{}        // closed when journal writer goroutine exits
 	cancelFunc     context.CancelFunc  // stops the broker's journal writer
 	onRotate       func(RotatedFile)   // optional callback for keeper
 	rotateDuration time.Duration       // journal rotation interval for live writer
@@ -147,9 +148,11 @@ func (s *InstanceState) ensureBroker() {
 	}
 
 	s.journalWriter = jw
+	s.journalDone = make(chan struct{})
 
 	go b.Run()
 	go func() {
+		defer close(s.journalDone)
 		if err := jw.Run(ctx); err != nil && ctx.Err() == nil {
 			s.logger.Error("journal writer failed", "instance", s.ID, "error", err)
 		}
@@ -159,12 +162,15 @@ func (s *InstanceState) ensureBroker() {
 	s.logger.Info("broker started", "instance", s.ID, "initial_head", initialHead)
 }
 
-// stopBroker stops the instance's broker and journal writer. Caller must hold s.mu.
+// stopBroker stops the instance's broker and journal writer. Blocks until
+// the journal writer's finalize completes (including OnRotate callbacks).
+// Caller must hold s.mu.
 func (s *InstanceState) stopBroker() {
 	if s.broker == nil {
 		return
 	}
 	b := s.broker
+	journalDone := s.journalDone
 	s.broker = nil
 
 	// Signal the broker to stop, then wait for Run() to exit so it's no
@@ -178,8 +184,20 @@ func (s *InstanceState) stopBroker() {
 	if s.cancelFunc != nil {
 		s.cancelFunc()
 	}
+
+	// Wait for the journal writer goroutine to finish. This ensures
+	// finalize() has run and OnRotate has fired before we return.
+	// Release the lock while waiting to avoid deadlock if OnRotate
+	// needs to acquire other locks.
+	s.mu.Unlock()
+	if journalDone != nil {
+		<-journalDone
+	}
+	s.mu.Lock()
+
 	s.journalCh = nil
 	s.journalWriter = nil
+	s.journalDone = nil
 	s.cancelFunc = nil
 	s.logger.Info("broker stopped", "instance", s.ID)
 }

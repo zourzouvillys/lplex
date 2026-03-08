@@ -262,6 +262,9 @@ func TestInstanceManagerStopBrokerCleanup(t *testing.T) {
 	if inst.journalCh != nil {
 		t.Fatal("journalCh should be nil after stopBroker")
 	}
+	if inst.journalDone != nil {
+		t.Fatal("journalDone should be nil after stopBroker")
+	}
 	if inst.cancelFunc != nil {
 		t.Fatal("cancelFunc should be nil after stopBroker")
 	}
@@ -320,13 +323,11 @@ func TestCloudJournalWriterRotation(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond) // let the writer drain
 
-	// Stop the broker. finalize() flushes the journal and fires OnRotate,
-	// but it runs in the journal writer goroutine which stopBroker doesn't
-	// join, so give it a moment.
+	// Stop the broker. stopBroker now waits for the journal writer goroutine
+	// to finish, so finalize() and OnRotate complete before this returns.
 	inst.mu.Lock()
 	inst.stopBroker()
 	inst.mu.Unlock()
-	time.Sleep(200 * time.Millisecond)
 
 	if got := rotated.Load(); got != 1 {
 		t.Fatalf("expected 1 OnRotate callback (from finalize), got %d", got)

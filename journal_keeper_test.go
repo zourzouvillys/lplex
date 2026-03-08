@@ -2245,27 +2245,22 @@ func TestStartupArchivesUnarchivedFiles(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	// Let Run() execute the startup scan, then cancel.
 	go func() {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(2 * time.Second)
 		cancel()
 	}()
 	keeper.Run(ctx)
 
-	// All three should be archived. p3 is the most recent but since there
-	// are 3 files, it's not the "active" one (only the newest per dir is
-	// skipped when there's exactly 1 file, but with 3 the newest is still
-	// skipped as it could be the active writer). Actually, the newest file
-	// should be skipped. Let's verify:
+	// All three should be archived. The startup sweep runs before any
+	// brokers are started, so all files are from previous runs.
 	if !isArchived(p1) {
 		t.Errorf("p1 should be archived: %s", p1)
 	}
 	if !isArchived(p2) {
 		t.Errorf("p2 should be archived: %s", p2)
 	}
-	// p3 is the newest file in the dir, so it should be skipped (active journal).
-	if isArchived(p3) {
-		t.Errorf("p3 (newest) should NOT be archived: %s", p3)
+	if !isArchived(p3) {
+		t.Errorf("p3 should be archived: %s", p3)
 	}
 }
 
@@ -2278,8 +2273,7 @@ func TestStartupSkipsAlreadyArchivedFiles(t *testing.T) {
 
 	p1 := createTestJournal(t, dir, lpjName("nmea2k", now.Add(-3*time.Hour)), 100)
 	p2 := createTestJournal(t, dir, lpjName("nmea2k", now.Add(-2*time.Hour)), 100)
-	// The newest file, will be skipped as active.
-	createTestJournal(t, dir, lpjName("nmea2k", now.Add(-1*time.Hour)), 100)
+	p3 := createTestJournal(t, dir, lpjName("nmea2k", now.Add(-1*time.Hour)), 100)
 
 	// p1 is already archived.
 	markArchived(p1)
@@ -2302,40 +2296,39 @@ done
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(2 * time.Second)
 		cancel()
 	}()
 	keeper.Run(ctx)
 
-	// p1 was already archived, p2 should now be archived too.
+	// p1 was already archived, p2 and p3 should now be archived too.
 	if !isArchived(p2) {
 		t.Error("p2 should be archived")
 	}
+	if !isArchived(p3) {
+		t.Error("p3 should be archived")
+	}
 
-	// Check the tracking file: only p2 should appear (p1 was already archived,
-	// p3 is skipped as active).
+	// Check the tracking file: p2 and p3 should appear (p1 was already archived).
 	data, err := os.ReadFile(trackFile)
 	if err != nil {
 		t.Fatalf("tracking file missing: %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != 1 {
-		t.Fatalf("expected 1 archive call, got %d: %v", len(lines), lines)
-	}
-	if lines[0] != p2 {
-		t.Errorf("expected archive call for %s, got %s", p2, lines[0])
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 archive calls, got %d: %v", len(lines), lines)
 	}
 }
 
-// TestStartupSkipsActiveFile verifies the startup sweep skips the most recent
-// file per directory (the one likely being written to).
-func TestStartupSkipsActiveFile(t *testing.T) {
+// TestStartupArchivesSingleFile verifies the startup sweep archives even when
+// there's only one file in a directory. This is the critical case: after a
+// short-lived deployment, there's one file from finalize and it must be archived.
+func TestStartupArchivesSingleFile(t *testing.T) {
 	dir := t.TempDir()
 	scriptDir := t.TempDir()
 	now := time.Now().UTC()
 
-	p1 := createTestJournal(t, dir, lpjName("nmea2k", now.Add(-2*time.Hour)), 100)
-	p2 := createTestJournal(t, dir, lpjName("nmea2k", now.Add(-1*time.Hour)), 100)
+	p1 := createTestJournal(t, dir, lpjName("nmea2k", now.Add(-1*time.Hour)), 100)
 
 	script := writeArchiveScript(t, scriptDir, okScript)
 
@@ -2348,17 +2341,12 @@ func TestStartupSkipsActiveFile(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(2 * time.Second)
 		cancel()
 	}()
 	keeper.Run(ctx)
 
-	// p1 (older) should be archived.
 	if !isArchived(p1) {
-		t.Error("p1 should be archived")
-	}
-	// p2 (newest) should NOT be archived (active journal).
-	if isArchived(p2) {
-		t.Error("p2 (newest/active) should NOT be archived")
+		t.Error("single file should be archived on startup")
 	}
 }
