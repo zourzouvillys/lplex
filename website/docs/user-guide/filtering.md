@@ -15,7 +15,8 @@ lplex supports filtering frames by PGN, manufacturer, device instance, and CAN N
 | Exclude PGN | NMEA 2000 Parameter Group Number (exclude) | `60928` (address claim) |
 | Manufacturer | Device manufacturer name | `Garmin`, `Victron` |
 | Instance | Device instance number (0-252) | `0`, `1` |
-| NAME | 64-bit ISO 11783 CAN NAME (hex) | `0x00A1B2C3D4E5F600` |
+| NAME | 64-bit ISO 11783 CAN NAME (include, hex) | `0x00A1B2C3D4E5F600` |
+| Exclude NAME | 64-bit ISO 11783 CAN NAME (exclude, hex) | `0x00A1B2C3D4E5F600` |
 
 ## Filter logic
 
@@ -42,9 +43,12 @@ lplexdump -instance 0
 
 # Specific device by NAME
 lplexdump -name 0x00A1B2C3D4E5F600
+
+# Exclude a specific device by NAME
+lplexdump -exclude-name 00A1B2C3D4E5F600
 ```
 
-Exclude filters can also be set in the [config file](/docs/user-guide/lplexdump#config-file) at both the global and per-boat level. Config, per-boat, and CLI exclusions are all additive.
+Exclude filters (`-exclude-pgn`, `-exclude-name`) can also be set in the [config file](/docs/user-guide/lplexdump#config-file) at both the global and per-boat level. Config, per-boat, and CLI exclusions are all additive.
 
 ## HTTP API filters
 
@@ -57,6 +61,9 @@ curl -N "http://inuc1.local:8089/events?pgn=129025&pgn=130306&manufacturer=Garmi
 
 # Exclude specific PGNs
 curl -N "http://inuc1.local:8089/events?exclude_pgn=60928&exclude_pgn=126996"
+
+# Exclude a specific device by CAN NAME
+curl -N "http://inuc1.local:8089/events?exclude_name=00A1B2C3D4E5F600"
 ```
 
 ### Buffered mode
@@ -101,11 +108,12 @@ The filter object used in session creation and client libraries:
   "exclude_pgn": [60928, 126996],
   "manufacturer": ["Garmin", "Victron"],
   "instance": [0, 1],
-  "name": ["0x00A1B2C3D4E5F600"]
+  "name": ["00A1B2C3D4E5F600"],
+  "exclude_name": ["00DEADBEEFCAFE00"]
 }
 ```
 
-All fields are optional. An empty filter (or no filter) matches all frames. `pgn` (include) and `exclude_pgn` can be combined: include is checked first, then exclude.
+All fields are optional. An empty filter (or no filter) matches all frames. `pgn`/`exclude_pgn` and `name`/`exclude_name` can be combined: include is checked first, then exclude.
 
 ## Display filter expressions
 

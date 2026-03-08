@@ -2,6 +2,7 @@ package lplex
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"log/slog"
 	"testing"
@@ -485,6 +486,53 @@ func TestBrokerFilterExcludeWithInclude(t *testing.T) {
 	}
 
 	// No more frames should arrive within a short timeout.
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer shortCancel()
+	_, err = c.Next(shortCtx)
+	if err == nil {
+		t.Error("expected timeout, got unexpected frame")
+	}
+}
+
+func TestBrokerFilterExcludeName(t *testing.T) {
+	b := newTestBroker()
+	go b.Run()
+	defer b.CloseRx()
+	drainTxFrame(b, time.Second)
+
+	// Register a device at src=1 with a known NAME.
+	var excludedNAME uint64 = 0x00A1B2C3D4E5F600
+	claimData := make([]byte, 8)
+	binary.LittleEndian.PutUint64(claimData, excludedNAME)
+	b.devices.HandleAddressClaim(1, claimData)
+
+	// Register a different device at src=2.
+	var keptNAME uint64 = 0x00DEADBEEFCAFE00
+	binary.LittleEndian.PutUint64(claimData, keptNAME)
+	b.devices.HandleAddressClaim(2, claimData)
+
+	filter := &EventFilter{ExcludeNames: []uint64{excludedNAME}}
+	c := b.NewConsumer(ConsumerConfig{Cursor: b.CurrentSeq() + 1, Filter: filter})
+	defer func() { _ = c.Close() }()
+
+	// Frame from excluded device should be dropped.
+	injectFrame(b, 129025, 1, []byte{0xAA, 0, 0, 0, 0, 0, 0, 0})
+	// Frame from kept device should pass.
+	injectFrame(b, 129025, 2, []byte{0xBB, 0, 0, 0, 0, 0, 0, 0})
+	time.Sleep(50 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	frame, err := c.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame.Header.Source != 2 {
+		t.Errorf("frame source = %d, want 2", frame.Header.Source)
+	}
+
+	// No more frames.
 	shortCtx, shortCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer shortCancel()
 	_, err = c.Next(shortCtx)

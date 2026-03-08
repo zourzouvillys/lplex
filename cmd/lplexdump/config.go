@@ -14,17 +14,19 @@ import (
 
 // BoatConfig holds the connection settings for a named boat.
 type BoatConfig struct {
-	Name        string   // config key, e.g. "sv-dockwise"
-	MDNS        string   // mDNS instance name to search for, e.g. "inuc1"
-	Cloud       string   // cloud fallback URL, e.g. "https://lplex.dockwise.app/instances/sv-dockwise"
-	ExcludePGNs []uint32 // PGNs to exclude for this boat (additive with global)
+	Name         string   // config key, e.g. "sv-dockwise"
+	MDNS         string   // mDNS instance name to search for, e.g. "inuc1"
+	Cloud        string   // cloud fallback URL, e.g. "https://lplex.dockwise.app/instances/sv-dockwise"
+	ExcludePGNs  []uint32 // PGNs to exclude for this boat (additive with global)
+	ExcludeNames []string // CAN NAMEs to exclude for this boat (additive with global)
 }
 
 // DumpConfig holds global settings from the config file.
 type DumpConfig struct {
-	Boats       map[string]BoatConfig
-	MDNSTimeout time.Duration // 0 means use default (3s)
-	ExcludePGNs []uint32      // PGNs to exclude globally (all boats)
+	Boats        map[string]BoatConfig
+	MDNSTimeout  time.Duration // 0 means use default (3s)
+	ExcludePGNs  []uint32      // PGNs to exclude globally (all boats)
+	ExcludeNames []string      // CAN NAMEs to exclude globally (all boats)
 }
 
 // defaultConfigPath returns ~/.config/lplex/lplexdump.conf.
@@ -77,6 +79,9 @@ func loadConfig(path string) (DumpConfig, error) {
 	}
 	dc.ExcludePGNs = ep
 
+	// Parse global exclude-name list.
+	dc.ExcludeNames = getStringArray(cfg, "exclude-name")
+
 	// Parse boats.
 	boatsObj := cfg.GetObject("boats")
 	if boatsObj != nil {
@@ -99,6 +104,7 @@ func loadConfig(path string) (DumpConfig, error) {
 				return DumpConfig{}, fmt.Errorf("boat %q exclude-pgn: %w", name, err)
 			}
 			bc.ExcludePGNs = ep
+			bc.ExcludeNames = getStringArray(cfg, "boats."+name+".exclude-name")
 
 			dc.Boats[name] = bc
 		}
@@ -119,6 +125,27 @@ func getString(cfg *hocon.Config, path string) string {
 		return strings.Trim(string(s), `"`)
 	}
 	return v.String()
+}
+
+// getStringArray extracts a string array from the HOCON config.
+// Supports both array syntax (exclude-name = ["0xABC", "0xDEF"]) and single
+// values (exclude-name = "0xABC"). Returns nil if the path doesn't exist.
+func getStringArray(cfg *hocon.Config, path string) []string {
+	v := cfg.Get(path)
+	if v == nil {
+		return nil
+	}
+	switch v.Type() {
+	case hocon.ArrayType:
+		arr := v.(hocon.Array)
+		result := make([]string, len(arr))
+		for i, elem := range arr {
+			result[i] = strings.Trim(elem.String(), `"`)
+		}
+		return result
+	default:
+		return []string{strings.Trim(v.String(), `"`)}
+	}
 }
 
 // getUint32Array extracts an array of unsigned integers from the HOCON config.

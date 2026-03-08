@@ -152,5 +152,8 @@ func filterSessionJSON(f *Filter) map[string]any {
 	if len(f.Names) > 0 {
 		m["name"] = f.Names
 	}
+	if len(f.ExcludeNames) > 0 {
+		m["exclude_name"] = f.ExcludeNames
+	}
 	return m
 }

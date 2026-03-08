@@ -42,9 +42,29 @@ func newValueFilter(f *EventFilter, devices *DeviceRegistry) *valueFilter {
 		}
 	}
 
+	if len(f.ExcludeNames) > 0 {
+		vf.hasDev = true
+		excludeNames := f.ExcludeNames // capture for closure
+		prev := vf.devFunc
+		vf.devFunc = func(src uint8) bool {
+			dev := devices.Get(src)
+			if dev != nil && slices.Contains(excludeNames, dev.NAME) {
+				return false
+			}
+			if prev != nil {
+				return prev(src)
+			}
+			return true
+		}
+	}
+
 	if len(f.Manufacturers) > 0 || len(f.Names) > 0 || len(f.Instances) > 0 {
 		vf.hasDev = true
+		prev := vf.devFunc
 		vf.devFunc = func(src uint8) bool {
+			if prev != nil && !prev(src) {
+				return false
+			}
 			dev := devices.Get(src)
 			if dev == nil || dev.NAME == 0 {
 				return false

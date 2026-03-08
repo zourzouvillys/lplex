@@ -913,6 +913,54 @@ func TestEphemeralSSEExcludePGN(t *testing.T) {
 	}
 }
 
+func TestParseFilterParamsExcludeName(t *testing.T) {
+	req := httptest.NewRequest("GET", "/events?exclude_name=00A1B2C3D4E5F600&exclude_name=00DEADBEEFCAFE00", nil)
+	f, err := ParseFilterParams(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f == nil {
+		t.Fatal("filter should not be nil")
+	}
+	if len(f.ExcludeNames) != 2 {
+		t.Fatalf("ExcludeNames: got %d, want 2", len(f.ExcludeNames))
+	}
+	if f.ExcludeNames[0] != 0x00A1B2C3D4E5F600 {
+		t.Errorf("ExcludeNames[0] = %x, want 00A1B2C3D4E5F600", f.ExcludeNames[0])
+	}
+	if f.ExcludeNames[1] != 0x00DEADBEEFCAFE00 {
+		t.Errorf("ExcludeNames[1] = %x, want 00DEADBEEFCAFE00", f.ExcludeNames[1])
+	}
+}
+
+func TestCreateSessionWithExcludeName(t *testing.T) {
+	srv, b := newTestServer()
+	defer close(b.rxFrames)
+
+	body := `{"buffer_timeout":"PT5M","filter":{"exclude_name":["00A1B2C3D4E5F600"]}}`
+	req := httptest.NewRequest("PUT", "/clients/exclude-name-test", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+
+	b.sessionMu.RLock()
+	session := b.sessions["exclude-name-test"]
+	b.sessionMu.RUnlock()
+
+	if session.Filter == nil {
+		t.Fatal("filter should not be nil")
+	}
+	if len(session.Filter.ExcludeNames) != 1 {
+		t.Fatalf("ExcludeNames: got %d, want 1", len(session.Filter.ExcludeNames))
+	}
+	if session.Filter.ExcludeNames[0] != 0x00A1B2C3D4E5F600 {
+		t.Errorf("ExcludeNames[0] = %x, want 00A1B2C3D4E5F600", session.Filter.ExcludeNames[0])
+	}
+}
+
 func TestSendDisabledByDefault(t *testing.T) {
 	b := newTestBroker()
 	go b.Run()
