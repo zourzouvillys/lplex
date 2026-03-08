@@ -53,6 +53,7 @@ func main() {
 	retentionOverflowPolicy := flag.String("journal-retention-overflow-policy", "delete-unarchived", "Overflow policy: delete-unarchived or pause-recording")
 	archiveCommand := flag.String("journal-archive-command", "", "Path to archive script")
 	archiveTriggerStr := flag.String("journal-archive-trigger", "", "Archive trigger: on-rotate or before-expire")
+	journalRotateDur := flag.String("journal-rotate-duration", "PT1H", "Rotate live journal files after duration (ISO 8601, e.g. PT1H)")
 	configFile := flag.String("config", "", "Path to HOCON config file")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
@@ -85,6 +86,17 @@ func main() {
 	if err != nil {
 		logger.Error("failed to initialize instance manager", "error", err)
 		os.Exit(1)
+	}
+
+	// Parse and apply journal rotation duration for live writers.
+	if *journalRotateDur != "" {
+		rotateDur, err := lplex.ParseISO8601Duration(*journalRotateDur)
+		if err != nil {
+			logger.Error("invalid journal-rotate-duration", "value", *journalRotateDur, "error", err)
+			os.Exit(1)
+		}
+		im.SetJournalRotateDuration(rotateDur)
+		logger.Info("journal rotation configured", "duration", rotateDur)
 	}
 
 	// Set up journal keeper (retention + archive) if configured.

@@ -316,6 +316,7 @@ http {
 data-dir = "/data/lplex"
 
 journal {
+  rotate-duration = PT1H
   retention {
     max-age = P90D
     max-size = 53687091200

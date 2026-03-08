@@ -196,6 +196,10 @@ data-dir = "/data/lplex"
 
 # Same retention/archive config as lplex
 journal {
+  # Rotate live journal files after this duration (ISO 8601).
+  # Required for on-rotate archival to work (files must rotate to trigger archival).
+  rotate-duration = PT1H
+
   retention {
     max-age = P90D
     max-size = 107374182400
@@ -222,6 +226,8 @@ journal {
 | `-tls-key` | `grpc.tls.key` | (empty) | Server TLS key |
 | `-tls-client-ca` | `grpc.tls.client-ca` / `tls.client-ca` | (empty) | Client CA cert |
 | `-data-dir` | `data-dir` | `/data/lplex` | Data directory |
+
+| `-journal-rotate-duration` | `journal.rotate-duration` | `PT1H` | Rotate live journal files after this duration (ISO 8601) |
 
 Retention and archive flags are the same as lplex (see table above).
 

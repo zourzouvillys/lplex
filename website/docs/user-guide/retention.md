@@ -110,6 +110,10 @@ nmea2k-20260306T101500Z.lpj.archived
 
 The keeper uses these markers to track archive state across restarts.
 
+### Startup archive sweep
+
+On startup, the keeper scans all directories and archives any `.lpj` files that are missing their `.archived` marker. The most recent file in each directory is skipped (it may be the active journal still being written to). This catches files that were rotated but never archived, for example if the process crashed before the `on-rotate` callback fired, or if archiving was configured after files already existed on disk.
+
 ### Retry behavior
 
 Failed archives retry with exponential backoff: 1 minute initial delay, doubling up to a 1 hour cap.

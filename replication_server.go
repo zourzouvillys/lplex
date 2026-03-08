@@ -37,14 +37,15 @@ type InstanceState struct {
 	PersistedHoles []SeqRange `json:"holes,omitempty"`
 
 	// Runtime (not persisted)
-	events        *EventLog
-	broker        *Broker
-	journalDir    string
-	journalCh     chan RxFrame        // connects broker to its JournalWriter
-	journalWriter *JournalWriter      // live journal writer (nil when broker not running)
-	cancelFunc    context.CancelFunc  // stops the broker's journal writer
-	onRotate      func(RotatedFile)   // optional callback for keeper
-	logger        *slog.Logger
+	events         *EventLog
+	broker         *Broker
+	journalDir     string
+	journalCh      chan RxFrame        // connects broker to its JournalWriter
+	journalWriter  *JournalWriter      // live journal writer (nil when broker not running)
+	cancelFunc     context.CancelFunc  // stops the broker's journal writer
+	onRotate       func(RotatedFile)   // optional callback for keeper
+	rotateDuration time.Duration       // journal rotation interval for live writer
+	logger         *slog.Logger
 }
 
 // instanceStatePersist is the JSON shape written to state.json.
@@ -129,12 +130,13 @@ func (s *InstanceState) ensureBroker() {
 	s.cancelFunc = cancel
 
 	jw, err := NewJournalWriter(JournalConfig{
-		Dir:         journalDir,
-		Prefix:      "nmea2k",
-		BlockSize:   262144,
-		Compression: journal.CompressionZstd,
-		OnRotate:    s.onRotate,
-		Logger:      s.logger.With("instance", s.ID, "component", "journal"),
+		Dir:            journalDir,
+		Prefix:         "nmea2k",
+		BlockSize:      262144,
+		Compression:    journal.CompressionZstd,
+		RotateDuration: s.rotateDuration,
+		OnRotate:       s.onRotate,
+		Logger:         s.logger.With("instance", s.ID, "component", "journal"),
 	}, b.Devices(), s.journalCh)
 	if err != nil {
 		s.logger.Error("failed to create journal writer", "instance", s.ID, "error", err)
@@ -182,11 +184,12 @@ func (s *InstanceState) stopBroker() {
 
 // InstanceManager manages per-instance state on the cloud side.
 type InstanceManager struct {
-	mu        sync.Mutex
-	instances map[string]*InstanceState
-	dataDir   string
-	logger    *slog.Logger
-	onRotate  func(instanceID string, rf RotatedFile) // optional callback for keeper
+	mu              sync.Mutex
+	instances       map[string]*InstanceState
+	dataDir         string
+	logger          *slog.Logger
+	onRotate        func(instanceID string, rf RotatedFile) // optional callback for keeper
+	rotateDuration  time.Duration                           // journal rotation interval for live writers
 }
 
 // NewInstanceManager creates a new instance manager, loading any persisted state.
@@ -224,11 +227,11 @@ func NewInstanceManager(dataDir string, logger *slog.Logger) (*InstanceManager, 
 		}
 
 		state := &InstanceState{
-			ID:               id,
-			HoleTracker:      ht,
-			events:           NewEventLog(),
-			journalDir:       dir,
-			logger:           logger,
+			ID:          id,
+			HoleTracker: ht,
+			events:      NewEventLog(),
+			journalDir:  dir,
+			logger:      logger,
 		}
 		if persisted != nil {
 			state.Cursor = persisted.Cursor
@@ -255,6 +258,20 @@ func (im *InstanceManager) SetOnRotate(fn func(instanceID string, rf RotatedFile
 	for id, s := range im.instances {
 		s.mu.Lock()
 		s.onRotate = im.makeOnRotate(id)
+		s.mu.Unlock()
+	}
+}
+
+// SetJournalRotateDuration sets the rotation interval for live journal writers.
+// Must be called before any connections are accepted. Retroactively updates
+// all existing instances loaded at startup.
+func (im *InstanceManager) SetJournalRotateDuration(d time.Duration) {
+	im.mu.Lock()
+	defer im.mu.Unlock()
+	im.rotateDuration = d
+	for _, s := range im.instances {
+		s.mu.Lock()
+		s.rotateDuration = d
 		s.mu.Unlock()
 	}
 }
@@ -301,12 +318,13 @@ func (im *InstanceManager) GetOrCreate(id string) *InstanceState {
 	_ = os.MkdirAll(filepath.Join(dir, "journal"), 0o755)
 
 	s := &InstanceState{
-		ID:          id,
-		HoleTracker: NewHoleTracker(),
-		events:      NewEventLog(),
-		journalDir:  dir,
-		onRotate:    im.makeOnRotate(id),
-		logger:      im.logger,
+		ID:             id,
+		HoleTracker:    NewHoleTracker(),
+		events:         NewEventLog(),
+		journalDir:     dir,
+		onRotate:       im.makeOnRotate(id),
+		rotateDuration: im.rotateDuration,
+		logger:         im.logger,
 	}
 	im.instances[id] = s
 	im.logger.Info("created instance", "id", id)
