@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,15 +14,17 @@ import (
 
 // BoatConfig holds the connection settings for a named boat.
 type BoatConfig struct {
-	Name  string // config key, e.g. "sv-dockwise"
-	MDNS  string // mDNS instance name to search for, e.g. "inuc1"
-	Cloud string // cloud fallback URL, e.g. "https://lplex.dockwise.app/instances/sv-dockwise"
+	Name        string   // config key, e.g. "sv-dockwise"
+	MDNS        string   // mDNS instance name to search for, e.g. "inuc1"
+	Cloud       string   // cloud fallback URL, e.g. "https://lplex.dockwise.app/instances/sv-dockwise"
+	ExcludePGNs []uint32 // PGNs to exclude for this boat (additive with global)
 }
 
 // DumpConfig holds global settings from the config file.
 type DumpConfig struct {
 	Boats       map[string]BoatConfig
 	MDNSTimeout time.Duration // 0 means use default (3s)
+	ExcludePGNs []uint32      // PGNs to exclude globally (all boats)
 }
 
 // defaultConfigPath returns ~/.config/lplex/lplexdump.conf.
@@ -67,6 +70,13 @@ func loadConfig(path string) (DumpConfig, error) {
 		dc.MDNSTimeout = d
 	}
 
+	// Parse global exclude-pgn list.
+	ep, err := getUint32Array(cfg, "exclude-pgn")
+	if err != nil {
+		return DumpConfig{}, fmt.Errorf("config exclude-pgn: %w", err)
+	}
+	dc.ExcludePGNs = ep
+
 	// Parse boats.
 	boatsObj := cfg.GetObject("boats")
 	if boatsObj != nil {
@@ -83,6 +93,13 @@ func loadConfig(path string) (DumpConfig, error) {
 			if bc.MDNS == "" && bc.Cloud == "" {
 				return DumpConfig{}, fmt.Errorf("boat %q must have at least one of mdns or cloud", name)
 			}
+
+			ep, err := getUint32Array(cfg, "boats."+name+".exclude-pgn")
+			if err != nil {
+				return DumpConfig{}, fmt.Errorf("boat %q exclude-pgn: %w", name, err)
+			}
+			bc.ExcludePGNs = ep
+
 			dc.Boats[name] = bc
 		}
 	}
@@ -102,6 +119,37 @@ func getString(cfg *hocon.Config, path string) string {
 		return strings.Trim(string(s), `"`)
 	}
 	return v.String()
+}
+
+// getUint32Array extracts an array of unsigned integers from the HOCON config.
+// Supports both array syntax (exclude-pgn = [60928, 126996]) and single values
+// (exclude-pgn = 60928).
+func getUint32Array(cfg *hocon.Config, path string) ([]uint32, error) {
+	v := cfg.Get(path)
+	if v == nil {
+		return nil, nil
+	}
+	switch v.Type() {
+	case hocon.ArrayType:
+		arr := v.(hocon.Array)
+		result := make([]uint32, 0, len(arr))
+		for _, elem := range arr {
+			n, err := strconv.ParseUint(strings.TrimSpace(elem.String()), 10, 32)
+			if err != nil {
+				return nil, fmt.Errorf("invalid PGN %q: %w", elem.String(), err)
+			}
+			result = append(result, uint32(n))
+		}
+		return result, nil
+	case hocon.NumberType, hocon.StringType:
+		n, err := strconv.ParseUint(strings.TrimSpace(v.String()), 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("invalid PGN %q: %w", v.String(), err)
+		}
+		return []uint32{uint32(n)}, nil
+	default:
+		return nil, fmt.Errorf("expected number or array, got %v", v.Type())
+	}
 }
 
 // resolveBoat picks the right boat config. If name is empty and there's exactly

@@ -191,6 +191,12 @@ func main() {
 			os.Exit(1)
 		}
 		mdnsTimeout = dc.MDNSTimeout
+
+		// Merge global exclude-pgn from config into CLI flags.
+		for _, p := range dc.ExcludePGNs {
+			excludePGNs = append(excludePGNs, uint(p))
+		}
+
 		if boatSet {
 			bc, err := resolveBoat(*boatName, dc.Boats)
 			if err != nil {
@@ -198,6 +204,11 @@ func main() {
 				os.Exit(1)
 			}
 			boat = &bc
+
+			// Merge per-boat exclude-pgn from config into CLI flags.
+			for _, p := range bc.ExcludePGNs {
+				excludePGNs = append(excludePGNs, uint(p))
+			}
 		}
 	}
 

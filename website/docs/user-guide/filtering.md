@@ -44,6 +44,8 @@ lplexdump -instance 0
 lplexdump -name 0x00A1B2C3D4E5F600
 ```
 
+Exclude filters can also be set in the [config file](/docs/user-guide/lplexdump#config-file) at both the global and per-boat level. Config, per-boat, and CLI exclusions are all additive.
+
 ## HTTP API filters
 
 ### Ephemeral mode

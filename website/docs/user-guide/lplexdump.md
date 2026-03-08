@@ -97,12 +97,17 @@ Create `~/.config/lplex/lplexdump.conf` (HOCON format):
 # How long to wait for mDNS discovery before giving up (default: 3s)
 mdns-timeout = 5s
 
+# PGNs to exclude globally (applies to all boats)
+exclude-pgn = [60928, 126996]
+
 boats {
   sv-dockwise {
     # mDNS instance name (matches the hostname lplex registers)
     mdns = "inuc1"
     # cloud fallback URL (used when mDNS fails)
     cloud = "https://lplex.dockwise.app/instances/sv-dockwise"
+    # additional PGNs to exclude for this boat (additive with global)
+    exclude-pgn = [129029]
   }
 
   test-bench {
@@ -115,8 +120,12 @@ boats {
 | Setting | Default | Description |
 |---|---|---|
 | `mdns-timeout` | `3s` | How long to wait for mDNS discovery before falling back to cloud |
+| `exclude-pgn` | | PGNs to exclude globally, applies to all boats. Array or single value. |
 | `boats.<name>.mdns` | | mDNS instance name to look for (matches the hostname lplex registers) |
 | `boats.<name>.cloud` | | Cloud fallback URL (full base URL including instance path) |
+| `boats.<name>.exclude-pgn` | | PGNs to exclude for this boat, additive with the global list. Array or single value. |
+
+Global, per-boat, and CLI `-exclude-pgn` flags are all additive. For example, with the config above, connecting to `sv-dockwise` would exclude PGNs 60928, 126996, and 129029. Adding `-exclude-pgn 130312` on the command line would also exclude 130312.
 
 ### Connection flow
 
