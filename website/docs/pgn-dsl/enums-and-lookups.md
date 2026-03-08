@@ -29,11 +29,11 @@ enum WindReference {
 type WindReference uint8
 
 const (
-    WindReferenceTrueNorth    WindReference = 0
+    WindReferenceTrueNorth     WindReference = 0
     WindReferenceMagneticNorth WindReference = 1
-    WindReferenceApparent     WindReference = 2
-    WindReferenceTrueBoat     WindReference = 3
-    WindReferenceTrueWater    WindReference = 4
+    WindReferenceApparent      WindReference = 2
+    WindReferenceTrueBoat      WindReference = 3
+    WindReferenceTrueWater     WindReference = 4
 )
 
 func (v WindReference) String() string {
@@ -43,9 +43,13 @@ func (v WindReference) String() string {
     case 2: return "apparent"
     case 3: return "true_boat"
     case 4: return "true_water"
-    default: return "unknown"
+    default: return fmt.Sprintf("WindReference(%d)", v)
     }
 }
+
+// Known values marshal as JSON strings, unknown as numbers.
+func (v WindReference) MarshalJSON() ([]byte, error) { ... }
+func (v *WindReference) UnmarshalJSON(data []byte) error { ... }
 ```
 
 ### Usage in PGN
@@ -56,7 +60,14 @@ pgn 130306 "Wind Data" {
 }
 ```
 
-The Go struct field becomes `WindReference WindReference`, and JSON serialization uses the string value.
+The Go struct field becomes `WindReference WindReference`. In JSON, known enum values serialize as strings (the label), and unknown values serialize as numbers:
+
+```json
+{"wind_reference": "apparent"}
+{"wind_reference": 99}
+```
+
+`UnmarshalJSON` accepts both formats, so JSON round-trips are lossless.
 
 ### When to use enums
 
@@ -136,5 +147,5 @@ Display tools like `lplexdump` use `LookupFields()` to wrap lookup fields as `{"
 | `String()` | Yes (on the type) | `Name()` function |
 | Type safety | Yes | No |
 | Key space | Dense (0, 1, 2, ...) | Sparse (any values) |
-| JSON output | String value | `{"id": <raw>, "name": "..."}` object |
+| JSON output | String (known) or number (unknown) | `{"id": <raw>, "name": "..."}` object |
 | Use case | Small finite sets | Large/sparse mappings |

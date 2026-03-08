@@ -78,6 +78,8 @@ When stdout is piped (or `-json` is set), each frame is a JSON object per line:
 
 The `decoded` field is only present when `-decode` is enabled and the PGN is known.
 
+Enum fields serialize as strings for known values and as numbers for unknown values (e.g., `"wind_reference": "apparent"` or `"wind_reference": 99`).
+
 Fields with `lookup=` attributes in the PGN DSL are displayed as structured objects instead of flat integers:
 
 ```json

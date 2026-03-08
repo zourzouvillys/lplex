@@ -22,6 +22,8 @@ func GenerateGo(s *Schema, pkg string) string {
 	needsBinary := false
 	needsFmt := false
 	needsMath := false
+	needsJSON := len(s.Enums) > 0
+	needsStrconv := len(s.Enums) > 0
 	for _, p := range s.PGNs {
 		if p.IsNameOnly() {
 			continue
@@ -44,11 +46,17 @@ func GenerateGo(s *Schema, pkg string) string {
 	if needsBinary {
 		imports = append(imports, `"encoding/binary"`)
 	}
+	if needsJSON {
+		imports = append(imports, `"encoding/json"`)
+	}
 	if needsFmt {
 		imports = append(imports, `"fmt"`)
 	}
 	if needsMath {
 		imports = append(imports, `"math"`)
+	}
+	if needsStrconv {
+		imports = append(imports, `"strconv"`)
 	}
 	imports = append(imports, `"time"`)
 
@@ -81,6 +89,40 @@ func GenerateGo(s *Schema, pkg string) string {
 		}
 		fmt.Fprintf(&b, "\tdefault:\n\t\treturn fmt.Sprintf(\"%s(%%d)\", v)\n", goName)
 		b.WriteString("\t}\n}\n\n")
+
+		// MarshalJSON: known values → JSON string, unknown → JSON number
+		fmt.Fprintf(&b, "func (v %s) MarshalJSON() ([]byte, error) {\n", goName)
+		b.WriteString("\tswitch v {\n")
+		for _, v := range e.Values {
+			constName := goName + toPascal(v.Name)
+			fmt.Fprintf(&b, "\tcase %s:\n\t\treturn []byte(%q), nil\n", constName, `"`+v.Name+`"`)
+		}
+		b.WriteString("\tdefault:\n\t\treturn []byte(strconv.FormatUint(uint64(v), 10)), nil\n")
+		b.WriteString("\t}\n}\n\n")
+
+		// UnmarshalJSON: accept both string (label) and number (raw value)
+		fmt.Fprintf(&b, "func (v *%s) UnmarshalJSON(data []byte) error {\n", goName)
+		b.WriteString("\tif len(data) > 0 && data[0] == '\"' {\n")
+		b.WriteString("\t\tvar s string\n")
+		b.WriteString("\t\tif err := json.Unmarshal(data, &s); err != nil {\n")
+		b.WriteString("\t\t\treturn err\n")
+		b.WriteString("\t\t}\n")
+		b.WriteString("\t\tswitch s {\n")
+		for _, v := range e.Values {
+			constName := goName + toPascal(v.Name)
+			fmt.Fprintf(&b, "\t\tcase %q:\n\t\t\t*v = %s\n", v.Name, constName)
+		}
+		fmt.Fprintf(&b, "\t\tdefault:\n\t\t\treturn fmt.Errorf(\"unknown %s value: %%q\", s)\n", goName)
+		b.WriteString("\t\t}\n")
+		b.WriteString("\t\treturn nil\n")
+		b.WriteString("\t}\n")
+		b.WriteString("\tvar n uint8\n")
+		b.WriteString("\tif err := json.Unmarshal(data, &n); err != nil {\n")
+		b.WriteString("\t\treturn err\n")
+		b.WriteString("\t}\n")
+		fmt.Fprintf(&b, "\t*v = %s(n)\n", goName)
+		b.WriteString("\treturn nil\n")
+		b.WriteString("}\n\n")
 	}
 
 	// Lookup tables
