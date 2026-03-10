@@ -66,6 +66,14 @@ const sidebars: SidebarsConfig = {
         'contributing/journal-format',
       ],
     },
+    {
+      type: 'category',
+      label: 'Releases',
+      collapsed: false,
+      items: [
+        'releases/v0.3.0',
+      ],
+    },
   ],
 };
 
