@@ -9,8 +9,10 @@ import (
 
 	pb "github.com/sixfathoms/lplex/proto/replication/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // TestReplicationLiveStream verifies end-to-end live frame replication:
@@ -738,6 +740,172 @@ func TestReplicationCloudConsumerDuringLive(t *testing.T) {
 	}
 
 	t.Log("3 concurrent cloud consumers verified")
+
+	cancel()
+	<-done
+}
+
+// TestReplicationRateLimit verifies that the cloud closes the live stream
+// with ResourceExhausted when the boat sends frames faster than the NMEA 2000
+// CAN bus can physically produce.
+func TestReplicationRateLimit(t *testing.T) {
+	cloudAddr, _, _, cleanup := startCloudStack(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	conn, err := grpc.NewClient(cloudAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	client := pb.NewReplicationClient(conn)
+
+	// Handshake
+	_, err = client.Handshake(ctx, &pb.HandshakeRequest{
+		InstanceId: "rate-test",
+		HeadSeq:    1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Open live stream and blast frames as fast as possible.
+	// We need to exceed DefaultRateBurst + sustained rate to trigger rejection.
+	liveCtx := metadata.NewOutgoingContext(ctx, metadata.Pairs("x-instance-id", "rate-test"))
+	stream, err := client.Live(liveCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Send enough frames to exhaust the burst bucket and exceed the rate.
+	// The token bucket starts with DefaultRateBurst tokens and refills at
+	// DefaultMaxFrameRate/sec. Blasting instantly should exhaust it after
+	// ~DefaultRateBurst frames.
+	total := uint64(DefaultRateBurst + DefaultMaxFrameRate + 1)
+	var sendErr error
+	for i := uint64(1); i <= total; i++ {
+		sendErr = stream.Send(&pb.LiveUpstream{
+			Msg: &pb.LiveUpstream_Frame{
+				Frame: &pb.LiveFrame{
+					Seq:         i,
+					TimestampUs: time.Now().UnixMicro(),
+					CanId:       0x09F80100,
+					Data:        []byte{1, 2, 3, 4, 5, 6, 7, 8},
+				},
+			},
+		})
+		if sendErr != nil {
+			break
+		}
+	}
+
+	// The server closes the stream with ResourceExhausted. In gRPC
+	// bidirectional streams, Send() may return EOF while the actual status
+	// is delivered via Recv(). Always call Recv() to get the trailing status.
+	_, recvErr := stream.Recv()
+	if recvErr == nil {
+		// Keep draining in case there's buffered data before the error.
+		for {
+			_, recvErr = stream.Recv()
+			if recvErr != nil {
+				break
+			}
+		}
+	}
+
+	st, ok := status.FromError(recvErr)
+	if !ok || st.Code() != codes.ResourceExhausted {
+		t.Fatalf("expected ResourceExhausted, got: %v (code: %v, send_err: %v)", recvErr, st.Code(), sendErr)
+	}
+	t.Logf("rate limit correctly enforced after burst: %v", st.Message())
+}
+
+// TestReplicationLiveLagDetection verifies that the boat-side replication
+// client detects when its live consumer falls behind and reconnects at the
+// head, switching the gap to backfill mode.
+func TestReplicationLiveLagDetection(t *testing.T) {
+	cloudAddr, replServer, _, cleanup := startCloudStack(t)
+	defer cleanup()
+
+	// Disable rate limiting for this test so the lag check (every 1000
+	// frames) fires before the rate limiter would. We're testing lag
+	// detection, not rate limiting.
+	replServer.MaxFrameRate = 1_000_000
+	replServer.RateBurst = 1_000_000
+
+	logger := slog.Default()
+
+	// Use a small ring buffer so frames are cheap to produce.
+	boatBroker := NewBroker(BrokerConfig{
+		RingSize: 65536,
+		Logger:   logger,
+	})
+	go boatBroker.Run()
+	defer boatBroker.CloseRx()
+
+	// Feed more than DefaultMaxLiveLag frames before starting replication so
+	// the consumer will start at seq 1 and immediately be behind.
+	feedFrames(boatBroker, int(DefaultMaxLiveLag)+5000)
+	waitForSeq(t, boatBroker, DefaultMaxLiveLag+5000)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	replClient := NewReplicationClient(ReplicationClientConfig{
+		Target:     cloudAddr,
+		InstanceID: "lag-test",
+		Logger:     logger,
+	}, boatBroker)
+	go func() { done <- replClient.Run(ctx) }()
+
+	// Keep feeding frames to maintain the lag
+	go func() {
+		for ctx.Err() == nil {
+			feedFrames(boatBroker, 200)
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+
+	// Wait for the cloud broker to appear
+	var cloudBroker *Broker
+	deadline := time.After(10 * time.Second)
+	for cloudBroker == nil {
+		select {
+		case <-deadline:
+			t.Fatal("timeout waiting for cloud broker")
+		default:
+			cloudBroker = replServer.GetInstanceBroker("lag-test")
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+
+	// The client should detect lag and reconnect at the head. After the
+	// lag-triggered reconnect, the cloud should receive recent frames
+	// (near the current boat head) rather than being stuck replaying from
+	// seq 1 forever.
+	boatHead := boatBroker.CurrentSeq()
+	// We expect the cloud to have frames within a reasonable range of
+	// the boat's head after the lag-triggered reconnect.
+	targetSeq := boatHead - 1000
+	if targetSeq < 1 {
+		targetSeq = 1
+	}
+	waitForCloudSeq(t, cloudBroker, targetSeq, 15*time.Second)
+
+	cloudHead := cloudBroker.CurrentSeq()
+	t.Logf("lag detection worked: boat_head=%d, cloud_head=%d", boatBroker.CurrentSeq(), cloudHead)
+
+	// Verify the instance has holes (from the lag-triggered gap)
+	inst := replServer.GetInstanceState("lag-test")
+	if inst != nil {
+		instStatus := inst.Status()
+		t.Logf("instance status: cursor=%d, holes=%d, boat_head=%d",
+			instStatus.Cursor, len(instStatus.Holes), instStatus.BoatHeadSeq)
+	}
 
 	cancel()
 	<-done

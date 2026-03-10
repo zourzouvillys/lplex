@@ -34,8 +34,11 @@ var configToFlag = map[string]string{
 	"replication.instance-id":    "replication-instance-id",
 	"replication.tls.cert":       "replication-tls-cert",
 	"replication.tls.key":        "replication-tls-key",
-	"replication.tls.ca":         "replication-tls-ca",
-	"health.bus-silence-threshold": "bus-silence-threshold",
+	"replication.tls.ca":                    "replication-tls-ca",
+	"replication.max-live-lag":               "replication-max-live-lag",
+	"replication.lag-check-interval":         "replication-lag-check-interval",
+	"replication.min-lag-reconnect-interval": "replication-min-lag-reconnect-interval",
+	"health.bus-silence-threshold":           "bus-silence-threshold",
 }
 
 // findConfigFile resolves which config file to use.

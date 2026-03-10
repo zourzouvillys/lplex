@@ -34,6 +34,9 @@ var configToFlag = map[string]string{
 	"journal.rotate-size":               "journal-rotate-size",
 	"journal.archive.command":           "journal-archive-command",
 	"journal.archive.trigger":           "journal-archive-trigger",
+	"replication.rate-limit":            "replication-rate-limit",
+	"replication.rate-burst":            "replication-rate-burst",
+	"replication.max-live-lag":          "replication-max-live-lag",
 }
 
 // findConfigFile resolves which config file to use.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/sixfathoms/lplex/journal"
 	pb "github.com/sixfathoms/lplex/proto/replication/v1"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
@@ -451,6 +452,12 @@ type ReplicationServer struct {
 	pb.UnimplementedReplicationServer
 	im     *InstanceManager
 	logger *slog.Logger
+
+	// Resource protection tuning. Zero values use defaults from
+	// replication_limits.go.
+	MaxFrameRate float64 // max frames/sec per live stream (default: DefaultMaxFrameRate)
+	RateBurst    int     // burst allowance for transient spikes (default: DefaultRateBurst)
+	MaxLiveLag   uint64  // max frames live can lag before closing stream (default: DefaultMaxLiveLag)
 }
 
 // NewReplicationServer creates a new replication gRPC server.
@@ -524,6 +531,30 @@ func (s *ReplicationServer) Live(stream pb.Replication_LiveServer) error {
 	var ackedThrough uint64
 	var framesReceived uint64
 
+	// Token bucket rate limiter: NMEA 2000 CAN bus can produce at most
+	// ~1800 frames/sec. If a boat exceeds that, something is wrong
+	// (uncapped replay, buggy client). Close the stream immediately
+	// rather than applying backpressure.
+	rl := rate.Limit(DefaultMaxFrameRate)
+	if s.MaxFrameRate > 0 {
+		rl = rate.Limit(s.MaxFrameRate)
+	}
+	burst := DefaultRateBurst
+	if s.RateBurst > 0 {
+		burst = s.RateBurst
+	}
+	limiter := rate.NewLimiter(rl, burst)
+
+	maxLag := DefaultMaxLiveLag
+	if s.MaxLiveLag > 0 {
+		maxLag = s.MaxLiveLag
+	}
+
+	// Track the highest seq received on this live stream (not the cursor,
+	// which only advances on continuous frames and stays stuck when holes
+	// exist from backfill). Used for cloud-side lag detection.
+	var lastLiveSeq uint64
+
 	ackTicker := time.NewTicker(5 * time.Second)
 	defer ackTicker.Stop()
 
@@ -568,6 +599,25 @@ func (s *ReplicationServer) Live(stream pb.Replication_LiveServer) error {
 			}
 
 			framesReceived++
+
+			// Rate limit: reject streams that exceed CAN bus physics.
+			if !limiter.Allow() {
+				s.logger.Warn("live frame rate exceeded, closing stream",
+					"instance", inst.ID,
+					"frames_received", framesReceived,
+					"rate_limit", int(rl),
+				)
+				inst.RecordEvent(EventLiveStop, map[string]any{
+					"frames_received": framesReceived,
+					"reason":          "rate_limit_exceeded",
+				})
+				return status.Errorf(codes.ResourceExhausted,
+					"live frame rate exceeded (%d/s max)", int(rl))
+			}
+
+			if frame.Seq > lastLiveSeq {
+				lastLiveSeq = frame.Seq
+			}
 
 			inst.mu.Lock()
 			inst.ensureBroker()
@@ -623,6 +673,32 @@ func (s *ReplicationServer) Live(stream pb.Replication_LiveServer) error {
 				inst.BoatJournalBytes = m.Status.JournalBytes
 				inst.LastSeen = time.Now()
 				inst.mu.Unlock()
+
+				// Cloud-side lag detection: if the boat reports a head
+				// far ahead of what we've received on this live stream,
+				// the stream isn't keeping up. Force reconnect so the
+				// boat jumps to head and backfills the gap.
+				//
+				// We compare against lastLiveSeq (not inst.Cursor)
+				// because the cursor only advances on continuous frames
+				// and stays stuck when backfill holes exist.
+				if lastLiveSeq > 0 && m.Status.HeadSeq > lastLiveSeq && m.Status.HeadSeq-lastLiveSeq > maxLag {
+					lag := m.Status.HeadSeq - lastLiveSeq
+					s.logger.Warn("cloud-side live lag exceeded, closing stream",
+						"instance", inst.ID,
+						"boat_head", m.Status.HeadSeq,
+						"last_live_seq", lastLiveSeq,
+						"lag", lag,
+						"threshold", maxLag,
+					)
+					inst.RecordEvent(EventLiveStop, map[string]any{
+						"frames_received": framesReceived,
+						"reason":          "cloud_lag_exceeded",
+						"lag":             lag,
+					})
+					return status.Errorf(codes.ResourceExhausted,
+						"live lag %d exceeds threshold %d", lag, maxLag)
+				}
 			}
 		}
 	}

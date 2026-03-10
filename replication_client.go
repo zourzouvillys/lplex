@@ -27,6 +27,12 @@ type ReplicationClientConfig struct {
 	KeyFile    string // client private key
 	CAFile     string // CA certificate for verifying server
 	Logger     *slog.Logger
+
+	// Resource protection tuning. Zero values use defaults from
+	// replication_limits.go.
+	MaxLiveLag              uint64        // max frames live can lag before reconnect (default: DefaultMaxLiveLag)
+	LagCheckInterval        int           // check lag every N frames sent (default: DefaultLagCheckInterval)
+	MinLagReconnectInterval time.Duration // min wait between lag-triggered reconnects (default: DefaultMinLagReconnectInterval)
 }
 
 // ReplicationClient streams frames from the local broker to a cloud
@@ -46,12 +52,25 @@ type ReplicationClient struct {
 	connected    bool
 	lastAck      time.Time
 	liveStartSeq uint64
+
+	// Lag detection (protected by mu)
+	lagTriggered     bool      // live stream fell behind, trigger fast reconnect
+	lastLagReconnect time.Time // throttle lag-triggered reconnects
 }
 
 // NewReplicationClient creates a new replication client. Call Run to start.
 func NewReplicationClient(cfg ReplicationClientConfig, broker *Broker) *ReplicationClient {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
+	}
+	if cfg.MaxLiveLag == 0 {
+		cfg.MaxLiveLag = DefaultMaxLiveLag
+	}
+	if cfg.LagCheckInterval == 0 {
+		cfg.LagCheckInterval = DefaultLagCheckInterval
+	}
+	if cfg.MinLagReconnectInterval == 0 {
+		cfg.MinLagReconnectInterval = DefaultMinLagReconnectInterval
 	}
 	return &ReplicationClient{
 		cfg:    cfg,
@@ -75,7 +94,37 @@ func (c *ReplicationClient) Run(ctx context.Context) error {
 
 		c.mu.Lock()
 		c.connected = false
+		lagTriggered := c.lagTriggered
+		c.lagTriggered = false
 		c.mu.Unlock()
+
+		if lagTriggered {
+			// Live stream fell behind. Reconnect immediately so the
+			// handshake creates a hole for the gap and the new live
+			// stream starts from the broker head.
+			c.logger.Warn("live lag exceeded, reconnecting to jump to head",
+				"error", err,
+			)
+
+			// Throttle: don't thrash if the system is persistently overloaded.
+			c.mu.Lock()
+			sinceLastLag := time.Since(c.lastLagReconnect)
+			c.lastLagReconnect = time.Now()
+			c.mu.Unlock()
+
+			if sinceLastLag < c.cfg.MinLagReconnectInterval {
+				wait := c.cfg.MinLagReconnectInterval - sinceLastLag
+				c.logger.Info("throttling lag reconnect", "wait", wait)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(wait):
+				}
+			}
+
+			backoff = time.Second
+			continue
+		}
 
 		c.logger.Warn("replication disconnected, reconnecting",
 			"error", err,
@@ -284,6 +333,8 @@ func (c *ReplicationClient) runLiveStream(ctx context.Context, client pb.Replica
 	statusTicker := time.NewTicker(5 * time.Second)
 	defer statusTicker.Stop()
 
+	var framesSent int
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -320,6 +371,27 @@ func (c *ReplicationClient) runLiveStream(ctx context.Context, client pb.Replica
 			},
 		}); err != nil {
 			return err
+		}
+
+		// Periodic lag check: if the consumer is falling too far behind
+		// the broker head, bail out so we can reconnect at the tip and
+		// let backfill deal with the gap.
+		framesSent++
+		if framesSent%c.cfg.LagCheckInterval == 0 {
+			head := c.broker.CurrentSeq()
+			cursor := consumer.Cursor()
+			if head > cursor && head-cursor > c.cfg.MaxLiveLag {
+				c.logger.Warn("live lag exceeded threshold",
+					"head", head,
+					"consumer_cursor", cursor,
+					"lag", head-cursor,
+					"threshold", c.cfg.MaxLiveLag,
+				)
+				c.mu.Lock()
+				c.lagTriggered = true
+				c.mu.Unlock()
+				return errLiveLagExceeded
+			}
 		}
 	}
 }

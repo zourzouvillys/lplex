@@ -49,6 +49,9 @@ func main() {
 	replTLSCert := flag.String("replication-tls-cert", "", "Client certificate for replication mTLS")
 	replTLSKey := flag.String("replication-tls-key", "", "Client private key for replication mTLS")
 	replTLSCA := flag.String("replication-tls-ca", "", "CA certificate for replication server verification")
+	replMaxLiveLag := flag.Int("replication-max-live-lag", int(lplex.DefaultMaxLiveLag), "Max frames live stream can lag before switching to backfill")
+	replLagCheckInterval := flag.Int("replication-lag-check-interval", lplex.DefaultLagCheckInterval, "Check live lag every N frames sent")
+	replMinLagReconnect := flag.String("replication-min-lag-reconnect-interval", "30s", "Min interval between lag-triggered reconnects (e.g. 30s)")
 	sendEnabled := flag.Bool("send-enabled", false, "Enable the /send and /query HTTP endpoints (default: disabled)")
 	sendRulesStr := flag.String("send-rules", "", "Semicolon-separated send rules (e.g. 'pgn:59904; !pgn:65280-65535')")
 	busSilenceTimeout := flag.String("bus-silence-timeout", "", "Alert when no CAN frames received for this duration (ISO 8601, e.g. PT30S)")
@@ -247,13 +250,22 @@ func main() {
 	// Start replication client if configured
 	var replClient *lplex.ReplicationClient
 	if *replTarget != "" && *replInstanceID != "" {
+		minLagReconnect, err := time.ParseDuration(*replMinLagReconnect)
+		if err != nil {
+			logger.Error("invalid replication-min-lag-reconnect-interval", "value", *replMinLagReconnect, "error", err)
+			os.Exit(1)
+		}
+
 		replClient = lplex.NewReplicationClient(lplex.ReplicationClientConfig{
-			Target:     *replTarget,
-			InstanceID: *replInstanceID,
-			CertFile:   *replTLSCert,
-			KeyFile:    *replTLSKey,
-			CAFile:     *replTLSCA,
-			Logger:     logger,
+			Target:                  *replTarget,
+			InstanceID:              *replInstanceID,
+			CertFile:                *replTLSCert,
+			KeyFile:                 *replTLSKey,
+			CAFile:                  *replTLSCA,
+			Logger:                  logger,
+			MaxLiveLag:              uint64(*replMaxLiveLag),
+			LagCheckInterval:        *replLagCheckInterval,
+			MinLagReconnectInterval: minLagReconnect,
 		}, broker)
 
 		wg.Add(1)

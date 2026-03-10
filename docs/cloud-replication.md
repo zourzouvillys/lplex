@@ -151,7 +151,58 @@ Typical case: 0-3 holes. All operations are linear on the hole count.
 1. **Live goroutine**: Creates a `Consumer` from the broker's current head, sends `LiveFrame` for each new frame, periodic `LiveStatus` every 5s. Reads `LiveAck` responses.
 2. **Backfill goroutine**: Reads raw blocks from journal files for each hole (newest-first), sends `Block` messages. Reads `BackfillAck` to track remaining holes.
 
-On disconnect, exponential backoff (1s, 2s, 4s, ... capped at 60s). Re-handshake tells the client what the cloud now has. A new hole forms for the gap.
+On disconnect, exponential backoff (1s, 2s, 4s, ... capped at 60s). Re-handshake tells the client what the cloud now has. A new hole forms for the gap. Lag-triggered reconnects skip exponential backoff and reconnect immediately (with a 30-second throttle to prevent thrashing).
+
+## Resource Protections
+
+Three mechanisms constrain resource usage on the live stream. All thresholds are configurable (see below).
+
+### Rate Limiting (Cloud)
+
+The cloud Live handler enforces a per-stream token bucket rate limiter based on NMEA 2000 physical constraints (CAN 2.0B at 250 kbit/s, theoretical max ~1800 frames/sec):
+
+| Parameter | Default | Rationale |
+|---|---|---|
+| Rate | 2000 frames/sec | ~10% over theoretical CAN bus max |
+| Burst | 500 frames | Absorbs power-on storms (~250ms at max load) |
+| Action | `ResourceExhausted` | Stream closed, boat reconnects |
+
+Uses `Allow()` (hard reject) rather than `Wait()` (backpressure). If frames exceed CAN bus physics, something is fundamentally wrong.
+
+### Live Lag Detection (Boat)
+
+The boat checks `broker.CurrentSeq() - consumer.Cursor()` every 1,000 frames sent. If the gap exceeds 10,000 frames (~5 seconds at max bus rate):
+
+1. `runLiveStream` returns immediately
+2. `Run()` reconnects immediately (no exponential backoff)
+3. Handshake creates a hole for the gap
+4. New live starts from the head, backfill fills the gap
+
+The check is frame-count-based (not a ticker) because when lagging, `consumer.Next()` returns instantly and the loop spins at CPU speed.
+
+### Live Lag Detection (Cloud)
+
+Belt-and-suspenders. When the cloud receives `LiveStatus` (every ~5s), it compares `boat_head_seq` against the highest seq received on this live stream. If the gap exceeds 10,000 frames, the cloud closes the stream with `ResourceExhausted`.
+
+Uses `lastLiveSeq` (not `inst.Cursor`) because the cursor only advances on continuous frames and stays stuck when backfill holes exist.
+
+### Configuration
+
+**Boat (`lplex`):**
+
+| Flag | HOCON | Default | Description |
+|---|---|---|---|
+| `-replication-max-live-lag` | `replication.max-live-lag` | 10000 | Max frames live can lag before switching to backfill |
+| `-replication-lag-check-interval` | `replication.lag-check-interval` | 1000 | Check lag every N frames sent |
+| `-replication-min-lag-reconnect-interval` | `replication.min-lag-reconnect-interval` | 30s | Min interval between lag-triggered reconnects |
+
+**Cloud (`lplex-cloud`):**
+
+| Flag | HOCON | Default | Description |
+|---|---|---|---|
+| `-replication-rate-limit` | `replication.rate-limit` | 2000 | Max frames/sec per live stream |
+| `-replication-rate-burst` | `replication.rate-burst` | 500 | Burst allowance for transient spikes |
+| `-replication-max-live-lag` | `replication.max-live-lag` | 10000 | Max frames live can lag before closing stream |
 
 ## Configuration
 
@@ -165,6 +216,9 @@ CLI flags:
 | `-replication-tls-cert` | Client certificate for mTLS |
 | `-replication-tls-key` | Client private key |
 | `-replication-tls-ca` | CA certificate for server verification |
+| `-replication-max-live-lag` | Max frames live can lag before switching to backfill (default: 10000) |
+| `-replication-lag-check-interval` | Check lag every N frames sent (default: 1000) |
+| `-replication-min-lag-reconnect-interval` | Min interval between lag-triggered reconnects (default: 30s) |
 
 HOCON:
 ```hocon
@@ -176,6 +230,9 @@ replication {
     key = "/etc/lplex/boat.key"
     ca = "/etc/lplex/ca.crt"
   }
+  max-live-lag = 10000
+  lag-check-interval = 1000
+  min-lag-reconnect-interval = "30s"
 }
 ```
 
@@ -190,6 +247,9 @@ CLI flags:
 | `-tls-cert` | | Server certificate |
 | `-tls-key` | | Server private key |
 | `-tls-client-ca` | | CA certificate for client verification |
+| `-replication-rate-limit` | `2000` | Max frames/sec per live stream |
+| `-replication-rate-burst` | `500` | Burst allowance for transient spikes |
+| `-replication-max-live-lag` | `10000` | Max frames live can lag before closing stream |
 
 HOCON (`lplex-cloud.conf`):
 ```hocon

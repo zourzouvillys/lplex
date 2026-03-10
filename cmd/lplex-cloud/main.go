@@ -55,6 +55,9 @@ func main() {
 	archiveTriggerStr := flag.String("journal-archive-trigger", "", "Archive trigger: on-rotate or before-expire")
 	journalRotateDur := flag.String("journal-rotate-duration", "PT1H", "Rotate live journal files after duration (ISO 8601, e.g. PT1H)")
 	journalRotateSize := flag.Int64("journal-rotate-size", 0, "Rotate live journal files after this many bytes (0 = disabled)")
+	replRateLimit := flag.Int("replication-rate-limit", lplex.DefaultMaxFrameRate, "Max frames/sec per live stream (0 = unlimited)")
+	replRateBurst := flag.Int("replication-rate-burst", lplex.DefaultRateBurst, "Burst allowance for transient frame rate spikes")
+	replMaxLiveLag := flag.Int("replication-max-live-lag", int(lplex.DefaultMaxLiveLag), "Max frames live stream can lag before closing stream")
 	configFile := flag.String("config", "", "Path to HOCON config file")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
@@ -129,6 +132,9 @@ func main() {
 	}
 
 	replServer := lplex.NewReplicationServer(im, logger)
+	replServer.MaxFrameRate = float64(*replRateLimit)
+	replServer.RateBurst = *replRateBurst
+	replServer.MaxLiveLag = uint64(*replMaxLiveLag)
 
 	httpMux := http.NewServeMux()
 	registerCloudHTTP(httpMux, im, replServer, logger)

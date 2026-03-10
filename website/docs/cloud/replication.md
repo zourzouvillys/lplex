@@ -139,14 +139,70 @@ curl https://lplex.example.com/instances/boat-001/status
 curl https://lplex.example.com/instances/boat-001/replication/events?limit=50
 ```
 
+## Resource protections
+
+Three mechanisms prevent a boat from consuming excessive cloud resources or falling irrecoverably behind. All thresholds are configurable via CLI flags or HOCON config.
+
+### Rate limiting
+
+The cloud Live handler enforces a per-stream token bucket rate limiter based on NMEA 2000 physical constraints. CAN 2.0B at 250 kbit/s can produce at most ~1800 frames/sec.
+
+| Parameter | Default | Rationale |
+|---|---|---|
+| Rate | 2000 frames/sec | ~10% over theoretical CAN bus max |
+| Burst | 500 frames | Absorbs power-on storms (~250ms at max load) |
+| Action | gRPC `ResourceExhausted` | Stream closed, boat reconnects |
+
+If a boat sends faster than the physical bus allows (uncapped replay, buggy client), the cloud closes the stream immediately. The limiter uses hard rejection, not backpressure.
+
+### Live lag detection
+
+Both sides detect when the live stream falls behind.
+
+**Boat-side:** every 1,000 frames sent, the client checks `broker.CurrentSeq() - consumer.Cursor()`. If the gap exceeds 10,000 frames (~5 seconds at max bus rate):
+
+1. Live stream exits immediately
+2. Client reconnects without exponential backoff
+3. Handshake creates a hole for the gap
+4. New live stream starts at the current head
+5. Backfill fills the gap from journal files
+
+The check is frame-count-based (not a wall-clock ticker) because when lagging, the consumer reads from the ring buffer at CPU speed. A 30-second throttle prevents thrashing when the system is persistently overloaded.
+
+**Cloud-side:** when the cloud receives `LiveStatus` (every ~5s), it compares the boat's reported head against the highest sequence received on this live stream. If the gap exceeds 10,000 frames, the cloud closes the stream with `ResourceExhausted`. This is a belt-and-suspenders check for when the boat's own detection fails or is bypassed.
+
+:::info Why not use the cursor for cloud lag detection?
+The cloud cursor only advances on *continuous* frames and stays stuck when backfill holes exist, even when the live stream is keeping up at the head. The cloud tracks the actual last received live sequence separately.
+:::
+
+### Tuning
+
+**Boat-side** (`lplex`):
+
+| Flag | HOCON | Default | Description |
+|---|---|---|---|
+| `-replication-max-live-lag` | `replication.max-live-lag` | 10000 | Max frames before switching to backfill |
+| `-replication-lag-check-interval` | `replication.lag-check-interval` | 1000 | Check lag every N frames sent |
+| `-replication-min-lag-reconnect-interval` | `replication.min-lag-reconnect-interval` | 30s | Min interval between lag-triggered reconnects |
+
+**Cloud-side** (`lplex-cloud`):
+
+| Flag | HOCON | Default | Description |
+|---|---|---|---|
+| `-replication-rate-limit` | `replication.rate-limit` | 2000 | Max frames/sec per live stream |
+| `-replication-rate-burst` | `replication.rate-burst` | 500 | Burst allowance for transient spikes |
+| `-replication-max-live-lag` | `replication.max-live-lag` | 10000 | Max frames before closing stream |
+
 ## Reconnection
 
-The replication client automatically reconnects with exponential backoff. On reconnect:
+The replication client automatically reconnects with exponential backoff (1s, 2s, 4s, ... capped at 60s). On reconnect:
 
 1. Handshake exchanges current positions
 2. Cloud creates holes for any gaps
 3. Live stream resumes from the current head
 4. Backfill starts filling the new holes
+
+Lag-triggered reconnects skip exponential backoff and reconnect immediately (with a 30-second throttle to prevent thrashing).
 
 No data is lost as long as the boat has journal files covering the gap period.
 

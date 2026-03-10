@@ -105,3 +105,19 @@ journal {
     # trigger = on-rotate
   }
 }
+
+# Cloud replication (comment out to disable)
+# replication {
+#   target = "lplex.example.com:9443"
+#   instance-id = "boat-001"
+#   tls {
+#     cert = "/etc/lplex/boat-001.crt"
+#     key = "/etc/lplex/boat-001.key"
+#     ca = "/etc/lplex/ca.crt"
+#   }
+#
+#   # Resource protection tuning (defaults are usually fine)
+#   # max-live-lag = 10000               # frames before switching to backfill
+#   # lag-check-interval = 1000          # check lag every N frames sent
+#   # min-lag-reconnect-interval = "30s" # throttle between lag-triggered reconnects
+# }

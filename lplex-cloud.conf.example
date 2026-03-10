@@ -82,3 +82,10 @@ journal {
     # trigger = on-rotate
   }
 }
+
+# Replication resource protection tuning (defaults are usually fine)
+# replication {
+#   rate-limit = 2000    # max frames/sec per live stream
+#   rate-burst = 500     # burst allowance for transient spikes
+#   max-live-lag = 10000 # max frames live can lag before closing stream
+# }
