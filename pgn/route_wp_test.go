@@ -16,17 +16,17 @@ func TestDecodeNavigationRouteWPInformation(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	if m.StartRPS != 0xFFFF {
-		t.Errorf("StartRPS = %d, want %d", m.StartRPS, 0xFFFF)
+	if m.StartRps != 0xFFFF {
+		t.Errorf("StartRPS = %d, want %d", m.StartRps, 0xFFFF)
 	}
 	if m.Items != 2 {
 		t.Errorf("Items = %d, want 2", m.Items)
 	}
-	if m.DatabaseID != 0xFFFF {
-		t.Errorf("DatabaseID = %d, want %d", m.DatabaseID, 0xFFFF)
+	if m.DatabaseId != 0xFFFF {
+		t.Errorf("DatabaseID = %d, want %d", m.DatabaseId, 0xFFFF)
 	}
-	if m.RouteID != 0xFFFF {
-		t.Errorf("RouteID = %d, want %d", m.RouteID, 0xFFFF)
+	if m.RouteId != 0xFFFF {
+		t.Errorf("RouteID = %d, want %d", m.RouteId, 0xFFFF)
 	}
 	if m.NavigationDirection != 0 {
 		t.Errorf("NavigationDirection = %d, want 0", m.NavigationDirection)
@@ -43,8 +43,8 @@ func TestDecodeNavigationRouteWPInformation(t *testing.T) {
 
 	// WP1: all not-available.
 	wp1 := m.Waypoints[0]
-	if wp1.ID != 0xFFFF {
-		t.Errorf("wp[0].ID = %d, want %d", wp1.ID, 0xFFFF)
+	if wp1.Id != 0xFFFF {
+		t.Errorf("wp[0].ID = %d, want %d", wp1.Id, 0xFFFF)
 	}
 	if wp1.Name != "" {
 		t.Errorf("wp[0].Name = %q, want empty", wp1.Name)
@@ -59,8 +59,8 @@ func TestDecodeNavigationRouteWPInformation(t *testing.T) {
 
 	// WP2: destination "End" near San Juan Islands.
 	wp2 := m.Waypoints[1]
-	if wp2.ID != 1 {
-		t.Errorf("wp[1].ID = %d, want 1", wp2.ID)
+	if wp2.Id != 1 {
+		t.Errorf("wp[1].ID = %d, want 1", wp2.Id)
 	}
 	if wp2.Name != "End" {
 		t.Errorf("wp[1].Name = %q, want %q", wp2.Name, "End")

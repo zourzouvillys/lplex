@@ -11,7 +11,37 @@ import "time"
 type Schema struct {
 	Enums   []EnumDef
 	Lookups []LookupDef
+	Structs []StructDef
 	PGNs    []PGNDef
+}
+
+// StructDef defines a named sub-structure used by repeated variable-length groups.
+// Analogous to EnumDef but for composite types referenced by struct-typed fields.
+type StructDef struct {
+	Name   string     // snake_case (e.g. "satellite_in_view")
+	Fields []FieldDef // field layout within each entry
+	Line   int        // source line for error reporting
+}
+
+// HasVariableWidth returns true if any field in the struct is variable-width
+// (TypeStringLAU), making entry size unknowable at compile time.
+func (sd *StructDef) HasVariableWidth() bool {
+	for _, f := range sd.Fields {
+		if f.Type == TypeStringLAU {
+			return true
+		}
+	}
+	return false
+}
+
+// FixedEntryBytes returns the total bytes per entry for fixed-width structs.
+// Only valid when HasVariableWidth() returns false.
+func (sd *StructDef) FixedEntryBytes() int {
+	total := 0
+	for _, f := range sd.Fields {
+		total += f.Bits
+	}
+	return total / 8
 }
 
 // EnumDef defines a named enumeration used by lookup fields.
@@ -65,11 +95,26 @@ func (p *PGNDef) IsNameOnly() bool {
 	return p.Fields == nil
 }
 
+// HasVariableWidth returns true if any field is variable-length (TypeStringLAU
+// or TypeStruct with dynamic repeat), making the packet size unknowable at compile time.
+func (p *PGNDef) HasVariableWidth() bool {
+	for _, f := range p.Fields {
+		if f.Type == TypeStringLAU || f.Type == TypeStruct {
+			return true
+		}
+	}
+	return false
+}
+
 // TotalBits returns the total number of bits across all fields.
 // Repeated fields contribute Bits * RepeatCount.
+// Variable-width fields (TypeStringLAU, TypeStruct) contribute 0 bits.
 func (p *PGNDef) TotalBits() int {
 	total := 0
 	for _, f := range p.Fields {
+		if f.Type == TypeStringLAU || f.Type == TypeStruct {
+			continue
+		}
 		if f.IsRepeated() {
 			total += f.Bits * f.RepeatCount
 		} else {
@@ -97,6 +142,8 @@ type FieldDef struct {
 	Desc        string    // optional description
 	EnumRef     string    // enum type name (non-empty when Type == TypeEnum)
 	LookupRef   string    // lookup table name (non-empty when lookup= is set)
+	StructRef   string    // struct type name (non-empty when Type == TypeStruct)
+	RepeatRef   string    // dynamic repeat count field name (e.g. "sats_in_view")
 	Trim        string    // characters to right-trim from decoded string (e.g. "@ ")
 	Tolerance   *float64  // change detection tolerance (nil = not set, 0 = any change significant)
 	Signed      bool      // true for int types
@@ -123,9 +170,14 @@ func (f *FieldDef) IsSkipped() bool {
 	return f.IsReserved() || f.IsUnknown()
 }
 
-// IsRepeated returns true if this field uses the repeat= attribute.
+// IsRepeated returns true if this field uses a static repeat= count.
 func (f *FieldDef) IsRepeated() bool {
 	return f.RepeatCount > 0
+}
+
+// IsDynamicRepeat returns true if this field uses repeat=<field_ref> (runtime count).
+func (f *FieldDef) IsDynamicRepeat() bool {
+	return f.RepeatRef != ""
 }
 
 // HasScaling returns true if the field has a scale or offset transformation.
@@ -137,17 +189,20 @@ func (f *FieldDef) HasScaling() bool {
 type FieldType int
 
 const (
-	TypeUint     FieldType = iota // unsigned integer
-	TypeInt                       // signed integer
-	TypeFloat                     // IEEE 754 float
-	TypeString                    // fixed-length ASCII string
-	TypeEnum                      // lookup enum (references an EnumDef)
-	TypeReserved                  // reserved/padding bits
-	TypeUnknown                   // unknown data (observed but undocumented)
+	TypeUint      FieldType = iota // unsigned integer
+	TypeInt                        // signed integer
+	TypeFloat                      // IEEE 754 float
+	TypeString                     // fixed-length ASCII string
+	TypeEnum                       // lookup enum (references an EnumDef)
+	TypeReserved                   // reserved/padding bits
+	TypeUnknown                    // unknown data (observed but undocumented)
+	TypeStringLAU                  // variable-length NMEA 2000 STRING_LAU
+	TypeStruct                     // reference to a StructDef (generates a slice)
 )
 
 // Resolve computes BitStart offsets for all fields in all PGNs and validates
-// enum references and dispatch groups. Call after parsing, before code generation.
+// enum references, struct references, and dispatch groups. Call after parsing,
+// before code generation.
 func (s *Schema) Resolve() error {
 	enumSet := make(map[string]bool, len(s.Enums))
 	for _, e := range s.Enums {
@@ -157,7 +212,6 @@ func (s *Schema) Resolve() error {
 	lookupSet := make(map[string]bool, len(s.Lookups))
 	for _, l := range s.Lookups {
 		lookupSet[l.Name] = true
-		// Validate no duplicate keys within a lookup.
 		seen := make(map[int64]bool, len(l.Values))
 		for _, v := range l.Values {
 			if seen[v.Key] {
@@ -170,19 +224,65 @@ func (s *Schema) Resolve() error {
 		}
 	}
 
+	structSet := make(map[string]bool, len(s.Structs))
+	for _, sd := range s.Structs {
+		if structSet[sd.Name] {
+			return &ResolveError{
+				Line:    sd.Line,
+				Message: "duplicate struct name: " + sd.Name,
+			}
+		}
+		if enumSet[sd.Name] {
+			return &ResolveError{
+				Line:    sd.Line,
+				Message: "struct name conflicts with enum: " + sd.Name,
+			}
+		}
+		structSet[sd.Name] = true
+	}
+
+	// Compute BitStart within each StructDef's fields (for fixed-width structs).
+	for si := range s.Structs {
+		offset := 0
+		for fi := range s.Structs[si].Fields {
+			s.Structs[si].Fields[fi].BitStart = offset
+			f := &s.Structs[si].Fields[fi]
+			offset += f.Bits // TypeStringLAU has Bits=0, ok for variable-width
+		}
+	}
+
 	for i := range s.PGNs {
 		if s.PGNs[i].IsNameOnly() {
 			continue
 		}
+
+		// Reclassify fields: if the parser treated an unknown type name as TypeEnum
+		// but it's actually a struct, fix it.
+		for j := range s.PGNs[i].Fields {
+			f := &s.PGNs[i].Fields[j]
+			if f.Type == TypeEnum && structSet[f.EnumRef] {
+				f.Type = TypeStruct
+				f.StructRef = f.EnumRef
+				f.EnumRef = ""
+			}
+		}
+
+		// Build a field name lookup for RepeatRef validation.
+		fieldNames := make(map[string]FieldDef)
 		offset := 0
 		for j := range s.PGNs[i].Fields {
 			s.PGNs[i].Fields[j].BitStart = offset
 			f := &s.PGNs[i].Fields[j]
-			if f.IsRepeated() {
+
+			switch {
+			case f.Type == TypeStringLAU || f.Type == TypeStruct:
+				// Variable-width: contributes 0 to static offset
+			case f.IsRepeated():
 				offset += f.Bits * f.RepeatCount
-			} else {
+			default:
 				offset += f.Bits
 			}
+
 			if f.Type == TypeEnum && !enumSet[f.EnumRef] {
 				return &ResolveError{
 					Line:    f.Line,
@@ -194,6 +294,49 @@ func (s *Schema) Resolve() error {
 					Line:    f.Line,
 					Message: "unknown lookup type: " + f.LookupRef,
 				}
+			}
+			if f.Type == TypeStruct && !structSet[f.StructRef] {
+				return &ResolveError{
+					Line:    f.Line,
+					Message: "unknown struct type: " + f.StructRef,
+				}
+			}
+
+			// Validate struct-typed fields must have RepeatRef.
+			if f.Type == TypeStruct && f.RepeatRef == "" {
+				return &ResolveError{
+					Line:    f.Line,
+					Message: "field " + f.Name + ": struct-typed fields require repeat=<field_name>",
+				}
+			}
+
+			// Validate RepeatRef references an existing uint field.
+			if f.RepeatRef != "" {
+				ref, ok := fieldNames[f.RepeatRef]
+				if !ok {
+					return &ResolveError{
+						Line:    f.Line,
+						Message: "field " + f.Name + ": repeat=" + f.RepeatRef + " references unknown field",
+					}
+				}
+				if ref.Type != TypeUint {
+					return &ResolveError{
+						Line:    f.Line,
+						Message: "field " + f.Name + ": repeat=" + f.RepeatRef + " must reference a uint field",
+					}
+				}
+			}
+
+			// Validate byte alignment before first variable-width field.
+			if (f.Type == TypeStringLAU || f.Type == TypeStruct) && offset%8 != 0 {
+				return &ResolveError{
+					Line:    f.Line,
+					Message: "field " + f.Name + ": variable-width field must be byte-aligned (cumulative bits = " + itoa(int64(offset)) + ")",
+				}
+			}
+
+			if !f.IsSkipped() && f.Name != "" {
+				fieldNames[f.Name] = *f
 			}
 		}
 	}

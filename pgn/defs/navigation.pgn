@@ -8,12 +8,12 @@ pgn 129027 "Position Delta High Precision Rapid Update"
 pgn 129033 "Time and Date"
 pgn 129044 "Datum" fast_packet
 pgn 129045 "User Datum Settings" fast_packet
-pgn 129285 "Navigation Route WP Information" fast_packet
+# PGN 129285 is defined below with struct route_waypoint.
 pgn 129291 "Set and Drift Rapid Update"
 pgn 129301 "Time to from Mark" fast_packet
 pgn 129302 "Bearing and Distance between two Marks" fast_packet
 pgn 129538 "GNSS Control Status" fast_packet
-pgn 129540 "GNSS Satellites in View" fast_packet
+# PGN 129540 is defined below with struct satellite_in_view.
 pgn 129541 "GPS Almanac Data" fast_packet
 pgn 129542 "GNSS Pseudorange Noise Statistics" fast_packet
 pgn 129545 "GNSS RAIM Output" fast_packet
@@ -203,4 +203,48 @@ pgn 129539 "GNSS DOPs" interval=1000ms {
   hdop           int16   :16  scale=0.01
   vdop           int16   :16  scale=0.01
   tdop           int16   :16  scale=0.01
+}
+
+# PGN 129285 — Navigation Route WP Information (variable-length)
+# Struct for each waypoint entry: ID, STRING_LAU name, lat/lon.
+
+struct route_waypoint {
+  id         uint16      :16
+  name       string_lau
+  latitude   int32       :32  scale=1e-7 unit="deg"
+  longitude  int32       :32  scale=1e-7 unit="deg"
+}
+
+pgn 129285 "Navigation Route WP Information" fast_packet {
+  start_rps              uint16  :16
+  items                  uint16  :16
+  database_id            uint16  :16
+  route_id               uint16  :16
+  navigation_direction   uint8   :3
+  supplementary_data     uint8   :2
+  _                               :3
+  route_name             string_lau
+  _                               :8
+  waypoints              route_waypoint  repeat=items
+}
+
+# PGN 129540 — GNSS Satellites in View (variable-length)
+# 3-byte header + 12 bytes per satellite entry.
+
+struct satellite_in_view {
+  prn              uint8   :8
+  elevation        int16   :16  scale=0.0001 unit="rad"
+  azimuth          uint16  :16  scale=0.0001 unit="rad"
+  snr              int16   :16  scale=0.01   unit="dB"
+  range_residuals  int32   :32  scale=0.00001 unit="m"
+  status           uint8   :4
+  _                         :4
+}
+
+pgn 129540 "GNSS Sats in View" fast_packet {
+  sid                  uint8               :8
+  range_residual_mode  uint8               :2
+  _                                        :6
+  sats_in_view         uint8               :8
+  satellites           satellite_in_view   repeat=sats_in_view
 }

@@ -14,8 +14,8 @@ func TestDecodeGNSSSatsInView(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	if m.SID != 0x69 {
-		t.Errorf("SID = %d, want %d", m.SID, 0x69)
+	if m.Sid != 0x69 {
+		t.Errorf("SID = %d, want %d", m.Sid, 0x69)
 	}
 	if m.RangeResidualMode != 1 {
 		t.Errorf("RangeResidualMode = %d, want 1", m.RangeResidualMode)
@@ -29,8 +29,8 @@ func TestDecodeGNSSSatsInView(t *testing.T) {
 
 	// Spot-check first satellite.
 	s0 := m.Satellites[0]
-	if s0.PRN != 3 {
-		t.Errorf("sat[0].PRN = %d, want 3", s0.PRN)
+	if s0.Prn != 3 {
+		t.Errorf("sat[0].PRN = %d, want 3", s0.Prn)
 	}
 	// Status should be a small value (0-5).
 	if s0.Status > 5 {

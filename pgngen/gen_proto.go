@@ -35,6 +35,27 @@ func GenerateProto(s *Schema, pkg string) string {
 		b.WriteString("}\n\n")
 	}
 
+	// Struct messages (sub-structures for variable-length groups).
+	for _, sd := range s.Structs {
+		msgName := toPascal(sd.Name)
+		fmt.Fprintf(&b, "message %s {\n", msgName)
+		fieldNum := 1
+		for _, f := range sd.Fields {
+			if f.IsSkipped() {
+				continue
+			}
+			protoType := protoFieldType(f)
+			comment := ""
+			if f.Unit != "" {
+				comment = fmt.Sprintf(" // %s", f.Unit)
+			}
+			fmt.Fprintf(&b, "  %s %s = %d;%s\n",
+				protoType, toSnake(f.Name), fieldNum, comment)
+			fieldNum++
+		}
+		b.WriteString("}\n\n")
+	}
+
 	// Messages (skip name-only PGNs)
 	for _, p := range s.PGNs {
 		if p.IsNameOnly() {
@@ -48,7 +69,6 @@ func GenerateProto(s *Schema, pkg string) string {
 			if f.IsSkipped() {
 				continue
 			}
-			protoType := protoFieldType(f)
 			comment := ""
 			if f.Unit != "" {
 				comment = fmt.Sprintf(" // %s", f.Unit)
@@ -60,11 +80,18 @@ func GenerateProto(s *Schema, pkg string) string {
 					comment += fmt.Sprintf("; see %s lookup", f.LookupRef)
 				}
 			}
-			if f.IsRepeated() {
+			switch {
+			case f.Type == TypeStruct:
+				msgType := toPascal(f.StructRef)
+				fmt.Fprintf(&b, "  repeated %s %s = %d;%s\n",
+					msgType, toSnake(f.Name), fieldNum, comment)
+			case f.IsRepeated():
+				protoType := protoFieldType(f)
 				name := repeatJSONName(f)
 				fmt.Fprintf(&b, "  repeated %s %s = %d;%s\n",
 					protoType, name, fieldNum, comment)
-			} else {
+			default:
+				protoType := protoFieldType(f)
 				fmt.Fprintf(&b, "  %s %s = %d;%s\n",
 					protoType, toSnake(f.Name), fieldNum, comment)
 			}
@@ -99,7 +126,7 @@ func protoFieldType(f FieldDef) string {
 		return "double"
 	}
 	switch f.Type {
-	case TypeString:
+	case TypeString, TypeStringLAU:
 		return "string"
 	case TypeFloat:
 		if f.Bits == 32 {

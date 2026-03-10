@@ -18,6 +18,31 @@ func GenerateJSONSchema(s *Schema) string {
 	defs := root["$defs"].(map[string]any)
 	oneOf := []any{}
 
+	// Struct definitions
+	for _, sd := range s.Structs {
+		name := toPascal(sd.Name)
+		props := map[string]any{}
+		required := []string{}
+		for _, f := range sd.Fields {
+			if f.IsSkipped() {
+				continue
+			}
+			fieldName := toSnake(f.Name)
+			prop := jsonSchemaFieldType(f, s)
+			if f.Unit != "" {
+				prop["description"] = f.Unit
+			}
+			props[fieldName] = prop
+			required = append(required, fieldName)
+		}
+		defs[name] = map[string]any{
+			"type":                  "object",
+			"properties":           props,
+			"required":             required,
+			"additionalProperties": false,
+		}
+	}
+
 	// Enum definitions
 	for _, e := range s.Enums {
 		enumValues := make([]any, 0, len(e.Values))
@@ -47,7 +72,13 @@ func GenerateJSONSchema(s *Schema) string {
 			var fieldName string
 			var prop map[string]any
 
-			if f.IsRepeated() {
+			if f.Type == TypeStruct {
+				fieldName = toSnake(f.Name)
+				prop = map[string]any{
+					"type":  "array",
+					"items": map[string]any{"$ref": "#/$defs/" + toPascal(f.StructRef)},
+				}
+			} else if f.IsRepeated() {
 				fieldName = repeatJSONName(f)
 				elemSchema := jsonSchemaFieldType(f, s)
 				if f.GroupMode == "map" {
@@ -109,7 +140,7 @@ func jsonSchemaFieldType(f FieldDef, s *Schema) map[string]any {
 		return map[string]any{"type": "number"}
 	}
 	switch f.Type {
-	case TypeString:
+	case TypeString, TypeStringLAU:
 		return map[string]any{"type": "string"}
 	case TypeFloat:
 		return map[string]any{"type": "number"}

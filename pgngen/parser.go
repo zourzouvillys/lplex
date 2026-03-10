@@ -43,6 +43,7 @@ func ParseFiles(sources map[string]string) (*Schema, error) {
 		}
 		merged.Enums = append(merged.Enums, s.Enums...)
 		merged.Lookups = append(merged.Lookups, s.Lookups...)
+		merged.Structs = append(merged.Structs, s.Structs...)
 		merged.PGNs = append(merged.PGNs, s.PGNs...)
 	}
 	if err := merged.Resolve(); err != nil {
@@ -78,6 +79,12 @@ func (p *parser) parse() (*Schema, error) {
 				return nil, err
 			}
 			s.Lookups = append(s.Lookups, l)
+		case "struct":
+			sd, err := p.parseStruct(tokens)
+			if err != nil {
+				return nil, err
+			}
+			s.Structs = append(s.Structs, sd)
 		case "pgn":
 			d, err := p.parsePGN(tokens)
 			if err != nil {
@@ -165,6 +172,37 @@ func (p *parser) parseLookup(tokens []string) (LookupDef, error) {
 	return LookupDef{}, p.errorf("unterminated lookup block")
 }
 
+func (p *parser) parseStruct(tokens []string) (StructDef, error) {
+	// struct <name> {
+	if len(tokens) < 3 || tokens[2] != "{" {
+		return StructDef{}, p.errorf("expected: struct <name> {")
+	}
+	sd := StructDef{Name: tokens[1], Line: p.lineNum()}
+	p.pos++
+	for p.pos < len(p.lines) {
+		line := p.stripComment(p.lines[p.pos])
+		toks := tokenize(line)
+		if len(toks) == 0 {
+			p.pos++
+			continue
+		}
+		if toks[0] == "}" {
+			if len(sd.Fields) == 0 {
+				return StructDef{}, p.errorf("empty struct body")
+			}
+			p.pos++
+			return sd, nil
+		}
+		f, err := p.parseField(toks)
+		if err != nil {
+			return StructDef{}, err
+		}
+		sd.Fields = append(sd.Fields, f)
+		p.pos++
+	}
+	return StructDef{}, p.errorf("unterminated struct block")
+}
+
 func (p *parser) parsePGN(tokens []string) (PGNDef, error) {
 	// pgn <number> "<description>" [attrs...] [{]
 	if len(tokens) < 3 {
@@ -249,6 +287,7 @@ func (p *parser) parseField(tokens []string) (FieldDef, error) {
 		return FieldDef{}, p.errorf("field needs at least name and bit width")
 	}
 
+	var err error
 	f := FieldDef{Line: p.lineNum()}
 	idx := 0
 
@@ -271,20 +310,31 @@ func (p *parser) parseField(tokens []string) (FieldDef, error) {
 		f.Type, f.Signed, f.EnumRef = classifyType(typStr)
 	}
 
-	// Bit width :<N>
-	if idx >= len(tokens) {
+	// Bit width :<N> (optional for string_lau and potential struct refs)
+	if idx < len(tokens) && strings.HasPrefix(tokens[idx], ":") {
+		bitsStr := tokens[idx]
+		bits, err := strconv.Atoi(bitsStr[1:])
+		if err != nil || bits <= 0 {
+			return FieldDef{}, p.errorf("field %s: invalid bit width %q", f.Name, bitsStr)
+		}
+		f.Bits = bits
+		idx++
+	} else if f.Type == TypeStringLAU {
+		// string_lau has no bit width (variable-length)
+		f.Bits = 0
+	} else if f.Type == TypeEnum {
+		// Could be a struct ref (resolved in Resolve). If no `:N` follows,
+		// treat as zero-width (struct). If `:N` is required (actual enum),
+		// the existing code path handles it above.
+		if idx >= len(tokens) || !strings.HasPrefix(tokens[idx], ":") {
+			// No bit width: must be a struct reference (resolved later).
+			f.Bits = 0
+		} else {
+			return FieldDef{}, p.errorf("field %s: missing bit width", f.Name)
+		}
+	} else {
 		return FieldDef{}, p.errorf("field %s: missing bit width", f.Name)
 	}
-	bitsStr := tokens[idx]
-	if !strings.HasPrefix(bitsStr, ":") {
-		return FieldDef{}, p.errorf("field %s: expected :<bits>, got %q", f.Name, bitsStr)
-	}
-	bits, err := strconv.Atoi(bitsStr[1:])
-	if err != nil || bits <= 0 {
-		return FieldDef{}, p.errorf("field %s: invalid bit width %q", f.Name, bitsStr)
-	}
-	f.Bits = bits
-	idx++
 
 	// Attributes
 	for idx < len(tokens) {
@@ -328,10 +378,15 @@ func (p *parser) parseField(tokens []string) (FieldDef, error) {
 				return FieldDef{}, p.errorf("reserved/unknown field cannot have repeat= attribute")
 			}
 			n, err := strconv.Atoi(v)
-			if err != nil || n < 2 {
-				return FieldDef{}, p.errorf("field %s: repeat= must be an integer >= 2, got %q", f.Name, v)
+			if err != nil {
+				// Not a number: treat as a field reference (dynamic repeat).
+				f.RepeatRef = v
+			} else {
+				if n < 2 {
+					return FieldDef{}, p.errorf("field %s: repeat= must be an integer >= 2, got %q", f.Name, v)
+				}
+				f.RepeatCount = n
 			}
-			f.RepeatCount = n
 		case "group":
 			mode := unquote(v)
 			if mode != "map" {
@@ -361,7 +416,26 @@ func (p *parser) parseField(tokens []string) (FieldDef, error) {
 		return FieldDef{}, p.errorf("field %s: string bit width must be multiple of 8", f.Name)
 	}
 
-	// Validate repeat= constraints
+	// Validate string_lau constraints
+	if f.Type == TypeStringLAU {
+		if f.Scale != 0 || f.Offset != 0 {
+			return FieldDef{}, p.errorf("field %s: string_lau cannot have scale or offset", f.Name)
+		}
+		if f.Tolerance != nil {
+			return FieldDef{}, p.errorf("field %s: string_lau cannot have tolerance=", f.Name)
+		}
+		if f.MatchValue != nil {
+			return FieldDef{}, p.errorf("field %s: string_lau cannot have value=", f.Name)
+		}
+		if f.LookupRef != "" {
+			return FieldDef{}, p.errorf("field %s: string_lau cannot have lookup=", f.Name)
+		}
+		if f.RepeatCount > 0 || f.RepeatRef != "" {
+			return FieldDef{}, p.errorf("field %s: string_lau cannot have repeat=", f.Name)
+		}
+	}
+
+	// Validate static repeat= constraints
 	if f.RepeatCount > 0 {
 		if f.MatchValue != nil {
 			return FieldDef{}, p.errorf("field %s: repeat= cannot be combined with value=", f.Name)
@@ -374,13 +448,13 @@ func (p *parser) parseField(tokens []string) (FieldDef, error) {
 		}
 	}
 
-	// Validate group= requires repeat=
-	if f.GroupMode != "" && f.RepeatCount == 0 {
+	// Validate group= requires repeat= (static or dynamic)
+	if f.GroupMode != "" && f.RepeatCount == 0 && f.RepeatRef == "" {
 		return FieldDef{}, p.errorf("field %s: group= requires repeat=", f.Name)
 	}
 
-	// Validate as= requires repeat=
-	if f.AliasPlural != "" && f.RepeatCount == 0 {
+	// Validate as= requires repeat= (static or dynamic)
+	if f.AliasPlural != "" && f.RepeatCount == 0 && f.RepeatRef == "" {
 		return FieldDef{}, p.errorf("field %s: as= requires repeat=", f.Name)
 	}
 
@@ -398,8 +472,10 @@ func classifyType(s string) (FieldType, bool, string) {
 		return TypeFloat, false, ""
 	case "string":
 		return TypeString, false, ""
+	case "string_lau":
+		return TypeStringLAU, false, ""
 	default:
-		// Assume it's an enum reference
+		// Assume it's an enum or struct reference (resolved later in Resolve)
 		return TypeEnum, false, s
 	}
 }

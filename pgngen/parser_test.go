@@ -567,6 +567,280 @@ pgn 129025 "Position Rapid Update" {
 	}
 }
 
+func TestParseStringLAU(t *testing.T) {
+	src := `
+pgn 129285 "Route Info" fast_packet {
+  items   uint16     :16
+  name    string_lau
+  _                   :8
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := s.PGNs[0].Fields[1]
+	if f.Type != TypeStringLAU {
+		t.Errorf("type = %d, want TypeStringLAU", f.Type)
+	}
+	if f.Bits != 0 {
+		t.Errorf("bits = %d, want 0 (variable-width)", f.Bits)
+	}
+	if f.Name != "name" {
+		t.Errorf("name = %q, want name", f.Name)
+	}
+}
+
+func TestParseStruct(t *testing.T) {
+	src := `
+struct satellite_in_view {
+  prn      uint8   :8
+  status   uint8   :4
+  _                 :4
+}
+
+pgn 129540 "GNSS Sats" fast_packet {
+  sid            uint8                :8
+  sats_in_view   uint8                :8
+  satellites     satellite_in_view    repeat=sats_in_view
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Structs) != 1 {
+		t.Fatalf("expected 1 struct, got %d", len(s.Structs))
+	}
+	sd := s.Structs[0]
+	if sd.Name != "satellite_in_view" {
+		t.Errorf("struct name = %q, want satellite_in_view", sd.Name)
+	}
+	if len(sd.Fields) != 3 {
+		t.Fatalf("expected 3 struct fields, got %d", len(sd.Fields))
+	}
+	if sd.Fields[0].Name != "prn" {
+		t.Errorf("struct field[0] = %q, want prn", sd.Fields[0].Name)
+	}
+
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	// After resolve, the PGN field should be TypeStruct.
+	f := s.PGNs[0].Fields[2]
+	if f.Type != TypeStruct {
+		t.Errorf("type = %d, want TypeStruct", f.Type)
+	}
+	if f.StructRef != "satellite_in_view" {
+		t.Errorf("StructRef = %q, want satellite_in_view", f.StructRef)
+	}
+	if f.RepeatRef != "sats_in_view" {
+		t.Errorf("RepeatRef = %q, want sats_in_view", f.RepeatRef)
+	}
+}
+
+func TestParseStructWithStringLAU(t *testing.T) {
+	src := `
+struct route_waypoint {
+  id         uint16      :16
+  name       string_lau
+  latitude   int32       :32
+  longitude  int32       :32
+}
+
+pgn 129285 "Route Info" fast_packet {
+  items       uint16           :16
+  route_name  string_lau
+  _                            :8
+  waypoints   route_waypoint   repeat=items
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	sd := s.Structs[0]
+	if !sd.HasVariableWidth() {
+		t.Error("struct with string_lau should be variable-width")
+	}
+
+	p := s.PGNs[0]
+	if !p.HasVariableWidth() {
+		t.Error("PGN with string_lau and struct should be variable-width")
+	}
+}
+
+func TestParseStructFixedWidth(t *testing.T) {
+	src := `
+struct sat {
+  prn   uint8   :8
+  snr   uint16  :16
+  _              :8
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sd := s.Structs[0]
+	if sd.HasVariableWidth() {
+		t.Error("struct with only fixed-width fields should not be variable-width")
+	}
+	if sd.FixedEntryBytes() != 4 {
+		t.Errorf("FixedEntryBytes = %d, want 4", sd.FixedEntryBytes())
+	}
+}
+
+func TestResolveStructErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		src     string
+		wantErr string
+	}{
+		{
+			name: "struct without repeat",
+			src: `
+struct foo {
+  x uint8 :8
+}
+pgn 99999 "Test" {
+  items  uint8  :8
+  foos   foo
+}
+`,
+			wantErr: "struct-typed fields require repeat=",
+		},
+		{
+			name: "repeat ref to unknown field",
+			src: `
+struct foo {
+  x uint8 :8
+}
+pgn 99999 "Test" {
+  items  uint8  :8
+  foos   foo    repeat=nope
+}
+`,
+			wantErr: "references unknown field",
+		},
+		{
+			name: "repeat ref to non-uint field",
+			src: `
+struct foo {
+  x uint8 :8
+}
+pgn 99999 "Test" {
+  name   string  :64
+  foos   foo     repeat=name
+}
+`,
+			wantErr: "must reference a uint field",
+		},
+		{
+			name: "unknown struct type",
+			src: `
+pgn 99999 "Test" {
+  items  uint8         :8
+  foos   nonexistent   repeat=items
+}
+`,
+			wantErr: "unknown enum type: nonexistent",
+		},
+		{
+			name: "duplicate struct name",
+			src: `
+struct foo {
+  x uint8 :8
+}
+struct foo {
+  y uint8 :8
+}
+`,
+			wantErr: "duplicate struct name",
+		},
+		{
+			name: "struct name conflicts with enum",
+			src: `
+enum foo {
+  0 = "bar"
+}
+struct foo {
+  x uint8 :8
+}
+`,
+			wantErr: "struct name conflicts with enum",
+		},
+		{
+			name: "variable-width field not byte-aligned",
+			src: `
+pgn 99999 "Test" {
+  x     uint8       :3
+  name  string_lau
+}
+`,
+			wantErr: "variable-width field must be byte-aligned",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := Parse(tt.src)
+			if err != nil {
+				if tt.wantErr != "" && strings.Contains(err.Error(), tt.wantErr) {
+					return
+				}
+				t.Fatalf("Parse error: %v", err)
+			}
+			err = s.Resolve()
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParseStringLAUConstraints(t *testing.T) {
+	tests := []struct {
+		name    string
+		src     string
+		wantErr string
+	}{
+		{
+			name:    "string_lau with scale",
+			src:     "pgn 99999 \"Test\" {\n  name string_lau scale=0.01\n}",
+			wantErr: "string_lau cannot have scale or offset",
+		},
+		{
+			name:    "string_lau with value",
+			src:     "pgn 99999 \"Test\" {\n  name string_lau value=1\n}",
+			wantErr: "string_lau cannot have value=",
+		},
+		{
+			name:    "string_lau with repeat",
+			src:     "pgn 99999 \"Test\" {\n  name string_lau repeat=3\n}",
+			wantErr: "string_lau cannot have repeat=",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(tt.src)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestTokenize(t *testing.T) {
 	tests := []struct {
 		input string

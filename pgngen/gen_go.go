@@ -28,6 +28,9 @@ func GenerateGo(s *Schema, pkg string) string {
 		if p.IsNameOnly() {
 			continue
 		}
+		if p.HasVariableWidth() {
+			needsBinary = true
+		}
 		for _, f := range p.Fields {
 			if f.IsSkipped() {
 				continue
@@ -136,6 +139,34 @@ func GenerateGo(s *Schema, pkg string) string {
 		b.WriteString("}\n\n")
 	}
 
+	// Struct definitions (sub-structures for variable-length groups).
+	structMap := make(map[string]*StructDef, len(s.Structs))
+	for i := range s.Structs {
+		sd := &s.Structs[i]
+		structMap[sd.Name] = sd
+		goName := toPascal(sd.Name)
+		fmt.Fprintf(&b, "// %s is a sub-structure entry type.\n", goName)
+		fmt.Fprintf(&b, "type %s struct {\n", goName)
+		for _, f := range sd.Fields {
+			if f.IsSkipped() {
+				continue
+			}
+			if f.Type == TypeStringLAU {
+				tag := fmt.Sprintf("`json:%q`", toSnake(f.Name))
+				fmt.Fprintf(&b, "\t%s string %s\n", toPascal(f.Name), tag)
+				continue
+			}
+			goType := goFieldType(f)
+			tag := fmt.Sprintf("`json:%q`", toSnake(f.Name))
+			comment := ""
+			if f.Unit != "" {
+				comment = " // " + f.Unit
+			}
+			fmt.Fprintf(&b, "\t%s %s %s%s\n", toPascal(f.Name), goType, tag, comment)
+		}
+		b.WriteString("}\n\n")
+	}
+
 	// Group PGNs by number to detect dispatch groups.
 	// Name-only PGNs are tracked separately for registry-only entries.
 	type pgnGroup struct {
@@ -174,7 +205,11 @@ func GenerateGo(s *Schema, pkg string) string {
 		if p.IsNameOnly() {
 			continue
 		}
-		writeVariant(&b, p)
+		if p.HasVariableWidth() {
+			writeVariableWidthVariant(&b, p, structMap)
+		} else {
+			writeVariant(&b, p)
+		}
 		writeLookupMethods(&b, p, lookupMap)
 		writeLookupFieldsMethod(&b, p, lookupMap)
 	}
@@ -428,6 +463,335 @@ func writeVariant(b *strings.Builder, p PGNDef) {
 	}
 	b.WriteString("\treturn data\n")
 	b.WriteString("}\n\n")
+}
+
+// writeVariableWidthVariant generates struct, Decode (no Encode) for a variable-width PGN.
+// Variable-width PGNs contain TypeStringLAU or TypeStruct fields whose sizes are
+// only known at runtime. Uses cursor-based decoding instead of static offsets.
+func writeVariableWidthVariant(b *strings.Builder, p PGNDef, structMap map[string]*StructDef) {
+	structName := toPascal(p.Description)
+
+	// Split fields into static prefix (before first variable-width field) and the rest.
+	splitIdx := 0
+	for i, f := range p.Fields {
+		if f.Type == TypeStringLAU || f.Type == TypeStruct {
+			splitIdx = i
+			break
+		}
+		splitIdx = i + 1
+	}
+	staticPrefix := p.Fields[:splitIdx]
+	dynamicTail := p.Fields[splitIdx:]
+
+	// Compute static prefix bytes for minimum length check.
+	staticBits := 0
+	for _, f := range staticPrefix {
+		staticBits += f.Bits
+	}
+	staticBytes := staticBits / 8
+
+	// Struct definition.
+	fmt.Fprintf(b, "// %s represents PGN %d — %s.\n", structName, p.PGN, p.Description)
+	fmt.Fprintf(b, "type %s struct {\n", structName)
+	for _, f := range p.Fields {
+		if f.IsSkipped() {
+			continue
+		}
+		switch f.Type {
+		case TypeStringLAU:
+			tag := fmt.Sprintf("`json:%q`", toSnake(f.Name))
+			fmt.Fprintf(b, "\t%s string %s\n", toPascal(f.Name), tag)
+		case TypeStruct:
+			goType := toPascal(f.StructRef)
+			fieldName := toPascal(f.Name)
+			jsonName := toSnake(f.Name)
+			tag := fmt.Sprintf("`json:\"%s,omitempty\"`", jsonName)
+			fmt.Fprintf(b, "\t%s []%s %s\n", fieldName, goType, tag)
+		default:
+			goType := goFieldType(f)
+			tag := fmt.Sprintf("`json:%q`", toSnake(f.Name))
+			comment := ""
+			if f.Unit != "" {
+				comment = " // " + f.Unit
+			}
+			fmt.Fprintf(b, "\t%s %s %s%s\n", toPascal(f.Name), goType, tag, comment)
+		}
+	}
+	b.WriteString("}\n\n")
+
+	// PGN method.
+	fmt.Fprintf(b, "func (%s) PGN() uint32 { return %d }\n\n", structName, p.PGN)
+
+	// Decode function.
+	fmt.Fprintf(b, "// Decode%s decodes PGN %d from raw bytes.\n", structName, p.PGN)
+	fmt.Fprintf(b, "func Decode%s(data []byte) (%s, error) {\n", structName, structName)
+	fmt.Fprintf(b, "\tif len(data) < %d {\n", staticBytes)
+	fmt.Fprintf(b, "\t\treturn %s{}, fmt.Errorf(\"pgn %d: need at least %d bytes, got %%d\", len(data))\n",
+		structName, p.PGN, staticBytes)
+	b.WriteString("\t}\n")
+	fmt.Fprintf(b, "\tvar m %s\n", structName)
+
+	// Decode static prefix using fixed offsets.
+	for _, f := range staticPrefix {
+		if f.IsSkipped() {
+			continue
+		}
+		writeDecodeField(b, f, toPascal(f.Name))
+	}
+
+	// Cursor init for dynamic tail.
+	fmt.Fprintf(b, "\toff := %d\n", staticBytes)
+
+	// Decode dynamic tail using cursor.
+	for _, f := range dynamicTail {
+		switch f.Type {
+		case TypeReserved, TypeUnknown:
+			reservedBytes := f.Bits / 8
+			if reservedBytes > 0 {
+				fmt.Fprintf(b, "\tif off+%d > len(data) { return m, nil }\n", reservedBytes)
+				fmt.Fprintf(b, "\toff += %d\n", reservedBytes)
+			}
+
+		case TypeStringLAU:
+			goField := toPascal(f.Name)
+			fmt.Fprintf(b, "\t{\n")
+			fmt.Fprintf(b, "\t\ts, n := decodeLAU(data[off:])\n")
+			fmt.Fprintf(b, "\t\tif n == 0 { return m, nil }\n")
+			fmt.Fprintf(b, "\t\tm.%s = s\n", goField)
+			fmt.Fprintf(b, "\t\toff += n\n")
+			fmt.Fprintf(b, "\t}\n")
+
+		case TypeStruct:
+			sd := structMap[f.StructRef]
+			fieldName := toPascal(f.Name)
+			countField := toPascal(f.RepeatRef)
+			goStructType := toPascal(f.StructRef)
+
+			if !sd.HasVariableWidth() {
+				// Fixed-width entries: we know the size at compile time.
+				entrySize := sd.FixedEntryBytes()
+				fmt.Fprintf(b, "\t{\n")
+				fmt.Fprintf(b, "\t\tcount := int(m.%s)\n", countField)
+				fmt.Fprintf(b, "\t\tif avail := (len(data) - off) / %d; count > avail { count = avail }\n", entrySize)
+				fmt.Fprintf(b, "\t\tm.%s = make([]%s, count)\n", fieldName, goStructType)
+				fmt.Fprintf(b, "\t\tfor i := range count {\n")
+				fmt.Fprintf(b, "\t\t\te := &m.%s[i]\n", fieldName)
+				writeStructFieldDecodes(b, sd, "off", "e", "\t\t\t")
+				fmt.Fprintf(b, "\t\t\toff += %d\n", entrySize)
+				fmt.Fprintf(b, "\t\t}\n")
+				fmt.Fprintf(b, "\t}\n")
+			} else {
+				// Variable-width entries: cursor per iteration.
+				minFixed := minStructFixedBytes(sd)
+				fmt.Fprintf(b, "\t{\n")
+				fmt.Fprintf(b, "\t\tcount := int(m.%s)\n", countField)
+				fmt.Fprintf(b, "\t\tm.%s = make([]%s, 0, count)\n", fieldName, goStructType)
+				fmt.Fprintf(b, "\t\tfor range count {\n")
+				fmt.Fprintf(b, "\t\t\tif off+%d > len(data) { break }\n", minFixed)
+				fmt.Fprintf(b, "\t\t\tvar e %s\n", goStructType)
+				writeVarStructFieldDecodes(b, sd, "off", "e", "\t\t\t")
+				fmt.Fprintf(b, "\t\t\tm.%s = append(m.%s, e)\n", fieldName, fieldName)
+				fmt.Fprintf(b, "\t\t}\n")
+				fmt.Fprintf(b, "\t}\n")
+			}
+
+		default:
+			// Regular field in the dynamic tail (shouldn't happen per validation,
+			// but handle gracefully anyway).
+			goField := toPascal(f.Name)
+			writeDecodeField(b, f, goField)
+		}
+	}
+
+	b.WriteString("\treturn m, nil\n")
+	b.WriteString("}\n\n")
+
+	// No Encode for variable-width PGNs.
+}
+
+// writeStructFieldDecodes emits decode statements for all fields of a fixed-width struct.
+// Uses compile-time offsets relative to a runtime base variable.
+func writeStructFieldDecodes(b *strings.Builder, sd *StructDef, baseVar, entryVar, indent string) {
+	for _, f := range sd.Fields {
+		if f.IsSkipped() {
+			continue
+		}
+		goField := toPascal(f.Name)
+		byteOff := f.BitStart / 8
+		bitInByte := f.BitStart % 8
+		expr := readBitsExprCursor(baseVar, byteOff, bitInByte, f.Bits, f.Signed)
+		if f.HasScaling() {
+			fmt.Fprintf(b, "%s%s.%s = float64(%s)", indent, entryVar, goField, expr)
+			if f.Scale != 0 {
+				fmt.Fprintf(b, " * %s", formatFloat(f.Scale))
+			}
+			if f.Offset != 0 {
+				fmt.Fprintf(b, " + %s", formatFloat(f.Offset))
+			}
+			b.WriteString("\n")
+		} else if f.Type == TypeEnum {
+			fmt.Fprintf(b, "%s%s.%s = %s(%s)\n", indent, entryVar, goField, f.EnumRef, expr)
+		} else {
+			goType := goFieldType(f)
+			if rawType(f) == goType {
+				fmt.Fprintf(b, "%s%s.%s = %s\n", indent, entryVar, goField, expr)
+			} else {
+				fmt.Fprintf(b, "%s%s.%s = %s(%s)\n", indent, entryVar, goField, goType, expr)
+			}
+		}
+	}
+}
+
+// writeVarStructFieldDecodes emits cursor-based decode for a variable-width struct.
+func writeVarStructFieldDecodes(b *strings.Builder, sd *StructDef, offVar, entryVar, indent string) {
+	for _, f := range sd.Fields {
+		if f.Type == TypeStringLAU {
+			goField := toPascal(f.Name)
+			fmt.Fprintf(b, "%s{\n", indent)
+			fmt.Fprintf(b, "%s\ts, n := decodeLAU(data[%s:])\n", indent, offVar)
+			fmt.Fprintf(b, "%s\tif n == 0 { break }\n", indent)
+			fmt.Fprintf(b, "%s\t%s.%s = s\n", indent, entryVar, goField)
+			fmt.Fprintf(b, "%s\t%s += n\n", indent, offVar)
+			fmt.Fprintf(b, "%s}\n", indent)
+			continue
+		}
+		if f.IsSkipped() {
+			nBytes := f.Bits / 8
+			if nBytes > 0 {
+				fmt.Fprintf(b, "%s%s += %d\n", indent, offVar, nBytes)
+			}
+			continue
+		}
+		goField := toPascal(f.Name)
+		nBytes := f.Bits / 8
+		bitInByte := f.BitStart % 8 // always 0 for cursor-based (byte aligned within entry)
+		expr := readBitsExprCursor(offVar, 0, bitInByte, f.Bits, f.Signed)
+		if f.HasScaling() {
+			fmt.Fprintf(b, "%s%s.%s = float64(%s)", indent, entryVar, goField, expr)
+			if f.Scale != 0 {
+				fmt.Fprintf(b, " * %s", formatFloat(f.Scale))
+			}
+			if f.Offset != 0 {
+				fmt.Fprintf(b, " + %s", formatFloat(f.Offset))
+			}
+			b.WriteString("\n")
+		} else if f.Type == TypeEnum {
+			fmt.Fprintf(b, "%s%s.%s = %s(%s)\n", indent, entryVar, goField, f.EnumRef, expr)
+		} else {
+			goType := goFieldType(f)
+			if rawType(f) == goType {
+				fmt.Fprintf(b, "%s%s.%s = %s\n", indent, entryVar, goField, expr)
+			} else {
+				fmt.Fprintf(b, "%s%s.%s = %s(%s)\n", indent, entryVar, goField, goType, expr)
+			}
+		}
+		if nBytes > 0 {
+			fmt.Fprintf(b, "%s%s += %d\n", indent, offVar, nBytes)
+		}
+	}
+}
+
+// readBitsExprCursor returns a Go expression that reads bits from data[<baseVar>+offset].
+// Like readBitsExpr but with a runtime base offset variable.
+func readBitsExprCursor(baseVar string, byteOff, bitInByte, bits int, signed bool) string {
+	off := func(n int) string {
+		if n == 0 {
+			return baseVar
+		}
+		return fmt.Sprintf("%s+%d", baseVar, n)
+	}
+	end := func(n int) string {
+		return fmt.Sprintf("%s+%d", baseVar, n)
+	}
+
+	if bitInByte == 0 {
+		switch bits {
+		case 8:
+			if signed {
+				return fmt.Sprintf("int8(data[%s])", off(byteOff))
+			}
+			return fmt.Sprintf("data[%s]", off(byteOff))
+		case 16:
+			if signed {
+				return fmt.Sprintf("int16(binary.LittleEndian.Uint16(data[%s:%s]))",
+					off(byteOff), end(byteOff+2))
+			}
+			return fmt.Sprintf("binary.LittleEndian.Uint16(data[%s:%s])",
+				off(byteOff), end(byteOff+2))
+		case 32:
+			if signed {
+				return fmt.Sprintf("int32(binary.LittleEndian.Uint32(data[%s:%s]))",
+					off(byteOff), end(byteOff+4))
+			}
+			return fmt.Sprintf("binary.LittleEndian.Uint32(data[%s:%s])",
+				off(byteOff), end(byteOff+4))
+		case 64:
+			if signed {
+				return fmt.Sprintf("int64(binary.LittleEndian.Uint64(data[%s:%s]))",
+					off(byteOff), end(byteOff+8))
+			}
+			return fmt.Sprintf("binary.LittleEndian.Uint64(data[%s:%s])",
+				off(byteOff), end(byteOff+8))
+		}
+	}
+
+	// Bit-field extraction with runtime offset.
+	mask := (uint64(1) << bits) - 1
+	if bitInByte+bits <= 8 {
+		var expr string
+		if bitInByte == 0 {
+			expr = fmt.Sprintf("data[%s] & 0x%02X", off(byteOff), mask)
+		} else {
+			expr = fmt.Sprintf("(data[%s] >> %d) & 0x%02X", off(byteOff), bitInByte, mask)
+		}
+		if signed {
+			return signExtendExpr(expr, bits)
+		}
+		return expr
+	}
+	if bitInByte+bits <= 16 {
+		var expr string
+		if bitInByte == 0 {
+			expr = fmt.Sprintf("binary.LittleEndian.Uint16(data[%s:%s]) & 0x%04X",
+				off(byteOff), end(byteOff+2), mask)
+		} else {
+			expr = fmt.Sprintf("(binary.LittleEndian.Uint16(data[%s:%s]) >> %d) & 0x%04X",
+				off(byteOff), end(byteOff+2), bitInByte, mask)
+		}
+		if signed {
+			return signExtendExpr(expr, bits)
+		}
+		return expr
+	}
+
+	// Wider cases are unlikely for sub-struct fields but handle them.
+	if bitInByte+bits <= 32 {
+		expr := fmt.Sprintf("(binary.LittleEndian.Uint32(data[%s:%s]) >> %d) & 0x%08X",
+			off(byteOff), end(byteOff+4), bitInByte, mask)
+		if signed {
+			return signExtendExpr(expr, bits)
+		}
+		return expr
+	}
+	expr := fmt.Sprintf("(binary.LittleEndian.Uint64(data[%s:%s]) >> %d) & 0x%016X",
+		off(byteOff), end(byteOff+8), bitInByte, mask)
+	if signed {
+		return signExtendExpr(expr, bits)
+	}
+	return expr
+}
+
+// minStructFixedBytes returns the minimum bytes needed before variable-width fields in a struct.
+func minStructFixedBytes(sd *StructDef) int {
+	total := 0
+	for _, f := range sd.Fields {
+		if f.Type == TypeStringLAU {
+			total += 2 // minimum STRING_LAU is 2 bytes (length + encoding)
+		} else {
+			total += f.Bits / 8
+		}
+	}
+	return total
 }
 
 // writeLookupMethods generates <FieldName>Name() methods for fields with lookup= references.
@@ -1020,7 +1384,7 @@ func GenerateGoHelpers(pkg string) string {
 	var b strings.Builder
 	b.WriteString("// Code generated by pgngen; DO NOT EDIT.\n\n")
 	b.WriteString("package " + pkg + "\n\n")
-	b.WriteString("import (\n\t\"encoding/json\"\n\t\"strconv\"\n\t\"strings\"\n)\n\n")
+	b.WriteString("import (\n\t\"encoding/binary\"\n\t\"encoding/json\"\n\t\"strconv\"\n\t\"strings\"\n)\n\n")
 	b.WriteString(`// signExtend performs sign extension on a value with the given number of significant bits.
 func signExtend(v uint64, bits int) int64 {
 	shift := uint(64 - bits)
@@ -1080,6 +1444,36 @@ func (u *Uint8s) UnmarshalJSON(data []byte) error {
 	}
 	*u = arr
 	return nil
+}
+
+// decodeLAU decodes an NMEA 2000 STRING_LAU (length-and-unicode) field.
+//
+//	Byte 0: total length (includes itself and the encoding byte)
+//	Byte 1: encoding (0 = UTF-16LE, 1 = ASCII)
+//	Remaining: string data
+//
+// Returns the decoded string and the total number of bytes consumed.
+func decodeLAU(data []byte) (string, int) {
+	if len(data) < 2 {
+		return "", 0
+	}
+	totalLen := int(data[0])
+	if totalLen < 2 {
+		return "", 2
+	}
+	if totalLen > len(data) {
+		totalLen = len(data)
+	}
+	encoding := data[1]
+	payload := data[2:totalLen]
+	if encoding == 0 && len(payload) >= 2 {
+		runes := make([]rune, 0, len(payload)/2)
+		for i := 0; i+1 < len(payload); i += 2 {
+			runes = append(runes, rune(binary.LittleEndian.Uint16(payload[i:i+2])))
+		}
+		return string(runes), totalLen
+	}
+	return string(payload), totalLen
 }
 `)
 	return b.String()

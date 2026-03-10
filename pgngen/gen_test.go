@@ -774,15 +774,6 @@ pgn 99999 "Test" {
 			wantErr: "repeat= must be an integer >= 2",
 		},
 		{
-			name: "repeat=foo",
-			src: `
-pgn 99999 "Test" {
-  x  uint8  :2  repeat=foo
-}
-`,
-			wantErr: "repeat= must be an integer >= 2",
-		},
-		{
 			name: "group without repeat",
 			src: `
 pgn 99999 "Test" {
@@ -1321,6 +1312,160 @@ pgn 129025 "Position Rapid Update" {
 	// Field-defined should.
 	if !strings.Contains(js, "PositionRapidUpdate") {
 		t.Error("field-defined PGN should have a JSON schema definition")
+	}
+}
+
+func TestGenerateGoStructDef(t *testing.T) {
+	src := `
+struct satellite_in_view {
+  prn              uint8   :8
+  elevation        int16   :16  scale=0.0001 unit="rad"
+  azimuth          uint16  :16  scale=0.0001 unit="rad"
+  snr              int16   :16  scale=0.01   unit="dB"
+  range_residuals  int32   :32  scale=0.00001 unit="m"
+  status           uint8   :4
+  _                         :4
+}
+
+pgn 129540 "GNSS Sats in View" fast_packet {
+  sid                  uint8               :8
+  range_residual_mode  uint8               :2
+  _                                        :6
+  sats_in_view         uint8               :8
+  satellites           satellite_in_view   repeat=sats_in_view
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	code := GenerateGo(s, "pgn")
+
+	// Sub-struct type should exist.
+	if !strings.Contains(code, "type SatelliteInView struct") {
+		t.Error("missing SatelliteInView struct")
+	}
+	if !strings.Contains(code, `Prn uint8 `+"`"+`json:"prn"`+"`") {
+		t.Error("missing Prn field in SatelliteInView")
+	}
+	if !strings.Contains(code, "Elevation float64") {
+		t.Error("missing Elevation float64 in SatelliteInView (has scale)")
+	}
+
+	// PGN struct should reference the sub-struct as a slice.
+	if !strings.Contains(code, "Satellites []SatelliteInView") {
+		t.Error("missing Satellites []SatelliteInView field")
+	}
+	if !strings.Contains(code, `json:"satellites,omitempty"`) {
+		t.Error("missing satellites json tag with omitempty")
+	}
+
+	// Decode should use cursor-based approach (variable-width PGN).
+	if !strings.Contains(code, "func DecodeGNSSSatsInView") {
+		t.Error("missing DecodeGNSSSatsInView function")
+	}
+	// Fixed-width struct → entrySize-based loop with pre-allocation.
+	if !strings.Contains(code, "count := int(m.SatsInView)") {
+		t.Error("missing count from SatsInView field")
+	}
+	if !strings.Contains(code, "make([]SatelliteInView, count)") {
+		t.Error("fixed-width struct should use pre-allocated slice")
+	}
+
+	// No Encode for variable-width PGNs.
+	if strings.Contains(code, "func (m *GNSSSatsInView) Encode()") {
+		t.Error("variable-width PGN should not have Encode method")
+	}
+}
+
+func TestGenerateGoVariableWidthStruct(t *testing.T) {
+	src := `
+struct route_waypoint {
+  id         uint16      :16
+  name       string_lau
+  latitude   int32       :32  scale=1e-7 unit="deg"
+  longitude  int32       :32  scale=1e-7 unit="deg"
+}
+
+pgn 129285 "Navigation Route WP Information" fast_packet {
+  start_rps              uint16  :16
+  items                  uint16  :16
+  database_id            uint16  :16
+  route_id               uint16  :16
+  navigation_direction   uint8   :3
+  supplementary_data     uint8   :2
+  _                               :3
+  route_name             string_lau
+  _                               :8
+  waypoints              route_waypoint  repeat=items
+}
+`
+	s, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Resolve(); err != nil {
+		t.Fatal(err)
+	}
+
+	code := GenerateGo(s, "pgn")
+
+	// Sub-struct with string_lau field.
+	if !strings.Contains(code, "type RouteWaypoint struct") {
+		t.Error("missing RouteWaypoint struct")
+	}
+	if !strings.Contains(code, "Name string") {
+		t.Error("missing Name string field in RouteWaypoint")
+	}
+
+	// PGN struct should have string_lau as string and struct as slice.
+	if !strings.Contains(code, "RouteName string") {
+		t.Error("missing RouteName string field")
+	}
+	if !strings.Contains(code, "Waypoints []RouteWaypoint") {
+		t.Error("missing Waypoints []RouteWaypoint field")
+	}
+
+	// Decode should use decodeLAU for string_lau fields.
+	if !strings.Contains(code, "decodeLAU(data[off:])") {
+		t.Error("missing decodeLAU call for string_lau field")
+	}
+
+	// Variable-width struct → cursor-based loop with append.
+	if !strings.Contains(code, "make([]RouteWaypoint, 0, count)") {
+		t.Error("variable-width struct should use append-based slice")
+	}
+	if !strings.Contains(code, "append(m.Waypoints, e)") {
+		t.Error("missing append for variable-width struct entries")
+	}
+
+	// Should have static prefix decode using fixed offsets.
+	if !strings.Contains(code, "m.StartRps = binary.LittleEndian.Uint16(data[0:2])") {
+		t.Error("static prefix should use fixed offset reads")
+	}
+
+	// No Encode.
+	if strings.Contains(code, "func (m *NavigationRouteWPInformation) Encode()") {
+		t.Error("variable-width PGN should not have Encode method")
+	}
+}
+
+func TestGenerateGoHelpersDecodeLAU(t *testing.T) {
+	code := GenerateGoHelpers("pgn")
+
+	if !strings.Contains(code, "func decodeLAU(data []byte) (string, int)") {
+		t.Error("missing decodeLAU function in helpers")
+	}
+	if !strings.Contains(code, `"encoding/binary"`) {
+		t.Error("missing encoding/binary import in helpers")
+	}
+	// UTF-16LE branch.
+	if !strings.Contains(code, "binary.LittleEndian.Uint16(payload[i:i+2])") {
+		t.Error("missing UTF-16LE decode in decodeLAU")
 	}
 }
 
