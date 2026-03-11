@@ -184,6 +184,66 @@ Use a previously defined enum name as the type:
 wind_reference  WindReference  :3
 ```
 
+### STRING_LAU type
+
+```
+alert_text  string_lau
+```
+
+`string_lau` is a variable-length Unicode string using the NMEA 2000 LAU (Length And Unicode) encoding: the first two bytes are a length prefix and encoding byte, followed by UTF-16LE encoded text. No bit width specifier is needed (the length is encoded in the data). Must be the last field in the PGN definition.
+
+Go type: `string`. The decoder reads the length prefix, decodes UTF-16LE to UTF-8, and trims null bytes.
+
+### Struct type
+
+```
+struct SatInfo {
+  prn          uint8   :8
+  elevation    int16   :16  scale=0.0001  unit="rad"
+  azimuth      uint16  :16  scale=0.0001  unit="rad"
+  snr          uint16  :16  scale=0.01    unit="dB"
+  range_residual  int32  :32  scale=0.0001
+  status       uint8   :4
+  _                     :4
+}
+
+pgn 129540 "GNSS Satellites in View" fast_packet on_demand {
+  sid               uint8     :8
+  range_residual_mode  uint8  :2
+  _                            :6
+  sats_in_view      uint8     :8
+  satellites        SatInfo        count=sats_in_view
+}
+```
+
+`struct` defines a reusable field group for dynamically-repeated sub-records. The struct is referenced by name in a field definition with `count=<field>` to specify the repeat count at runtime. Must be the last field in the PGN definition.
+
+Go type: the struct generates its own Go type, and the field generates a `[]StructName` slice. The decoder reads `count` elements sequentially from the remaining data.
+
+### Bytes type
+
+```
+params  bytes                                          # raw remaining bytes
+params  bytes  pgn_ref=commanded_pgn  count=num_pairs  # cross-PGN pair decode
+```
+
+`bytes` captures remaining packet data after all preceding fixed fields. No bit width specifier is needed. Must be the last field in the PGN definition.
+
+**Without `pgn_ref`**: decodes as raw bytes. Go type: `HexBytes` (a `[]byte` that JSON-marshals as a hex string).
+
+**With `pgn_ref=<field>` and `count=<field>`**: decodes as cross-PGN parameter pairs. The `pgn_ref` field holds the target PGN number, and `count` holds the number of pairs to decode. Each pair consists of a 1-byte field number followed by a value whose width is determined by looking up the target PGN's field metadata table.
+
+Go type: `[]ParamPair`. JSON output:
+
+```json
+[
+  {"field": 1, "name": "instance", "value": 32},
+  {"field": 10, "name": "indicator_9", "value": 1}
+]
+```
+
+This is used for PGN 126208 (NMEA Group Function) where Command/Request variants carry parameter pairs that reference fields in other PGNs by 1-based field number. See [Cross-PGN pair decoding](#cross-pgn-pair-decoding) below.
+
 ### Lookup types
 
 Use a previously defined lookup name as the type:
@@ -210,6 +270,8 @@ These are per-field attributes (placed after the `:bits` specifier). For PGN-lev
 | `repeat=N` | integer | Generate a slice of N elements (see [Repeated Fields](/pgn-dsl/repeated-fields)) |
 | `group="map"` | string | With `repeat=`, generate a map keyed by instance index |
 | `as="name"` | string | Custom name for the repeated field in the Go struct |
+| `pgn_ref=field` | identifier | Target PGN field for cross-PGN pair decoding. Only valid on `bytes` fields. Requires `count=`. |
+| `count=field` | identifier | Number of parameter pairs to decode. Only valid on `bytes` fields. Requires `pgn_ref=`. |
 
 ### Tolerance for change tracking
 
@@ -251,3 +313,71 @@ NMEA 2000 uses all-bits-set as a null/unavailable sentinel. The generated decode
 | `uint16 :16` | 0xFFFF |
 | `int16 :16` | 0x7FFF |
 | Scaled float | All-bits-set in raw value |
+
+## Cross-PGN pair decoding
+
+PGN 126208 (NMEA Group Function) carries parameter pairs that reference fields in a target PGN by 1-based field number. The `bytes` type with `pgn_ref=` and `count=` attributes handles this at runtime.
+
+### How it works
+
+The code generator builds a `fieldTable` mapping each PGN number to a `[]FieldMeta` (field name + byte width). At decode time, `decodeParamPairs()` reads each parameter pair from the raw bytes:
+
+1. Read the 1-byte field number (1-based index into the target PGN's field list)
+2. Look up the field's byte width and name from `fieldTable[targetPGN]`
+3. Read that many bytes as a little-endian unsigned integer
+4. Emit a `ParamPair{Field, Name, Value}`
+
+### Example
+
+```
+pgn 126208 "NMEA Group Function Command" fast_packet on_demand {
+  function_code      uint8   :8   value=1
+  commanded_pgn      uint32  :24
+  priority_setting   uint8   :4
+  _                           :4
+  number_of_pairs    uint8   :8
+  params             bytes        pgn_ref=commanded_pgn  count=number_of_pairs
+}
+```
+
+A Command targeting PGN 127501 (Binary Switch Bank Status) with 2 parameter pairs decodes as:
+
+```json
+{
+  "function_code": 1,
+  "commanded_pgn": 127501,
+  "priority_setting": 8,
+  "number_of_pairs": 2,
+  "params": [
+    {"field": 1, "name": "instance", "value": 32},
+    {"field": 10, "name": "indicator_9", "value": 1}
+  ]
+}
+```
+
+### Field numbering
+
+Fields in the metadata table are numbered sequentially starting at 1, matching the NMEA 2000 field numbering convention. Reserved (`_`) and unknown (`?`) fields are included in the count (with empty names) to keep indices aligned. Static repeats (`indicator :2 repeat=28`) expand to individual entries (`indicator_1` through `indicator_28`), each with their own field number.
+
+### Acknowledge variant
+
+The Acknowledge variant of PGN 126208 uses `bytes` without `pgn_ref`, so it decodes as raw `HexBytes`:
+
+```
+pgn 126208 "NMEA Group Function Acknowledge" fast_packet on_demand {
+  function_code        uint8   :8   value=2
+  acknowledged_pgn     uint32  :24
+  pgn_error_code       uint8   :4
+  control_error_code   uint8   :4
+  number_of_pairs      uint8   :8
+  params               bytes
+}
+```
+
+```json
+{
+  "function_code": 2,
+  "acknowledged_pgn": 127501,
+  "params": "010a"
+}
+```
