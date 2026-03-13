@@ -128,13 +128,29 @@ func decodeFrameRaw(f *lplexc.Frame) (any, error) {
 }
 
 // matchesDisplayFilter evaluates a display filter against a frame with optional decoded data.
-func matchesDisplayFilter(df *filter.Filter, f *lplexc.Frame, decoded any) bool {
+// The deviceMap is used to resolve src/dst sub-accessors (e.g., src.manufacturer, dst.manufacturer).
+func matchesDisplayFilter(df *filter.Filter, f *lplexc.Frame, decoded any, dm *deviceMap) bool {
 	if df == nil {
 		return true
 	}
 	ctx := &filter.EvalContext{PGN: f.PGN, Src: f.Src, Dst: f.Dst, Prio: f.Prio, Decoded: decoded}
 	if lf, ok := decoded.(lookupFielder); ok {
 		ctx.Lookups = lf.LookupFields()
+	}
+	if dm != nil {
+		if ctx.Lookups == nil {
+			ctx.Lookups = make(map[string]string)
+		}
+		if d, ok := dm.get(f.Src); ok {
+			ctx.Lookups["src.manufacturer"] = d.Manufacturer
+			ctx.Lookups["src.model_id"] = d.ModelID
+			ctx.Lookups["src.name"] = d.Name
+		}
+		if d, ok := dm.get(f.Dst); ok {
+			ctx.Lookups["dst.manufacturer"] = d.Manufacturer
+			ctx.Lookups["dst.model_id"] = d.ModelID
+			ctx.Lookups["dst.name"] = d.Name
+		}
 	}
 	return df.Match(ctx)
 }

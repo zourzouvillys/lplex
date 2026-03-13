@@ -125,9 +125,15 @@ lplex dump --where "pgn == 130310 && water_temperature < 280"
 
 # Filter by lookup name
 lplex dump --where 'register.name == "State of Charge"'
+
+# Filter by destination device manufacturer
+lplex dump --where 'dst.manufacturer == "Garmin"'
+
+# Filter by source device model
+lplex dump --where 'src.model_id == "GPS 19x NMEA 2000"'
 ```
 
-`--where` is a client-side display filter that evaluates after all other filters (PGN, manufacturer, etc.) have been applied. It automatically enables `--decode`. See [lplex: Display filter expressions](/user-guide/lplex#display-filter-expressions) for the full syntax.
+`--where` is a client-side display filter that evaluates after all other filters (PGN, manufacturer, etc.) have been applied. It automatically enables `--decode`. Device sub-accessors (`src.manufacturer`, `dst.manufacturer`, `src.model_id`, `dst.model_id`) resolve the frame's source/destination address against the device registry. See [lplex: Display filter expressions](/user-guide/lplex#display-filter-expressions) for the full syntax.
 
 ## Where filtering happens
 

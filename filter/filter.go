@@ -134,17 +134,23 @@ func eval(n node, ctx *EvalContext) bool {
 }
 
 func evalComp(n compNode, ctx *EvalContext) bool {
-	// Header field fast path.
-	if headerFields[n.field.name] {
+	// Header field without sub-accessor: numeric comparison.
+	if n.field.subName == "" && headerFields[n.field.name] {
 		return evalHeaderField(n, ctx)
 	}
 
-	// Lookup sub-accessor: field.name -> ctx.Lookups[field]
+	// Lookup sub-accessor. Header fields (src.manufacturer, dst.manufacturer)
+	// use the full dotted path as key. Decoded field lookups (register.name)
+	// use just the base field name for backward compatibility.
 	if n.field.subName != "" {
 		if ctx.Lookups == nil {
 			return false
 		}
-		resolved, ok := ctx.Lookups[n.field.name]
+		key := n.field.name
+		if headerFields[n.field.name] {
+			key = n.field.name + "." + n.field.subName
+		}
+		resolved, ok := ctx.Lookups[key]
 		if !ok {
 			return false
 		}

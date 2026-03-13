@@ -220,6 +220,12 @@ lplex dump --where "pgn == 61184 && register == 60813"
 # Victron register by human-readable lookup name
 lplex dump --where 'register.name == "State of Charge"'
 
+# Filter by destination device manufacturer
+lplex dump --where 'dst.manufacturer == "Garmin"'
+
+# Filter by source device model
+lplex dump --where 'src.model_id == "GPS 19x NMEA 2000"'
+
 # Combine with journal replay
 lplex dump --file recording.lpj --where "pgn == 130306 && wind_speed > 15"
 ```
@@ -230,6 +236,7 @@ Expressions support comparison operators (`==`, `!=`, `<`, `>`, `<=`, `>=`), boo
 
 **Field types:**
 - **Header fields** (always available): `pgn`, `src`, `dst`, `prio`
+- **Device sub-accessors**: `src.manufacturer`, `dst.manufacturer`, `src.model_id`, `dst.model_id`, `src.name`, `dst.name` resolve the source/destination address to device info from the device registry. The `.name` sub-accessor is the 64-bit ISO NAME in hex.
 - **Decoded struct fields** (by JSON tag name): `water_temperature`, `register`, `wind_speed`, `engine_speed`
 - **Lookup sub-accessor**: `register.name` resolves via `LookupFields()` to the human-readable name
 

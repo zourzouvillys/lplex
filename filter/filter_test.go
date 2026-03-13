@@ -405,6 +405,54 @@ func TestSingleQuoteStrings(t *testing.T) {
 	}
 }
 
+func TestHeaderFieldSubAccessor(t *testing.T) {
+	tests := []struct {
+		expr    string
+		lookups map[string]string
+		want    bool
+	}{
+		// src.manufacturer match.
+		{`src.manufacturer == "Garmin"`, map[string]string{"src.manufacturer": "Garmin"}, true},
+		{`src.manufacturer == "Garmin"`, map[string]string{"src.manufacturer": "Victron"}, false},
+		{`src.manufacturer != "Garmin"`, map[string]string{"src.manufacturer": "Victron"}, true},
+
+		// dst.manufacturer match.
+		{`dst.manufacturer == "Lowrance"`, map[string]string{"dst.manufacturer": "Lowrance"}, true},
+		{`dst.manufacturer == "Lowrance"`, map[string]string{"dst.manufacturer": "Garmin"}, false},
+
+		// dst.model_id match.
+		{`dst.model_id == "GPS 19x"`, map[string]string{"dst.model_id": "GPS 19x"}, true},
+		{`dst.model_id == "GPS 19x"`, map[string]string{}, false},
+
+		// Combined with header field.
+		{`pgn == 59904 && dst.manufacturer == "Garmin"`, map[string]string{"dst.manufacturer": "Garmin"}, true},
+		{`pgn == 59904 && dst.manufacturer == "Garmin"`, map[string]string{"dst.manufacturer": "Victron"}, false},
+
+		// No lookups at all: sub-accessor should not match.
+		{`src.manufacturer == "Garmin"`, nil, false},
+
+		// Plain src/dst without sub-accessor still works as numeric.
+		{`src == 42`, map[string]string{"src.manufacturer": "Garmin"}, true},
+		{`dst == 10`, map[string]string{"dst.manufacturer": "Lowrance"}, true},
+	}
+
+	for _, tt := range tests {
+		f, err := Compile(tt.expr)
+		if err != nil {
+			t.Fatalf("Compile(%q): %v", tt.expr, err)
+		}
+		ctx := &EvalContext{
+			PGN:     59904,
+			Src:     42,
+			Dst:     10,
+			Lookups: tt.lookups,
+		}
+		if got := f.Match(ctx); got != tt.want {
+			t.Errorf("Match(%q, lookups=%v) = %v, want %v", tt.expr, tt.lookups, got, tt.want)
+		}
+	}
+}
+
 func TestNegativeNumber(t *testing.T) {
 	f, err := Compile("sid > -1")
 	if err != nil {

@@ -362,7 +362,7 @@ func runReplay(ctx context.Context, path string, speed float64, startTimeStr str
 		if decode || df != nil {
 			rawDecoded, _ = decodeFrameRaw(&fr)
 		}
-		if !matchesDisplayFilter(df, &fr, rawDecoded) {
+		if !matchesDisplayFilter(df, &fr, rawDecoded, devices) {
 			continue
 		}
 
@@ -701,7 +701,7 @@ func streamEvents(sub *lplexc.Subscription, jsonMode, decode, changes bool, f *l
 			if decode || df != nil {
 				rawDecoded, _ = decodeFrameRaw(ev.Frame)
 			}
-			if !matchesDisplayFilter(df, ev.Frame, rawDecoded) {
+			if !matchesDisplayFilter(df, ev.Frame, rawDecoded, devices) {
 				continue
 			}
 
