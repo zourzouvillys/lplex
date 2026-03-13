@@ -296,6 +296,9 @@ func runSwitchesSet(_ *cobra.Command, args []string) error {
 	defer cancel()
 
 	client := lplexc.NewClient(serverURL)
+
+	// PGN 127502 is PDU2 (PF >= 240), so destination is always broadcast.
+	// Targeting happens via the instance field in the payload.
 	const controlPGN uint32 = 127502
 	if err := client.Send(ctx, controlPGN, switchSetSrc, 255, switchSetPrio, data); err != nil {
 		return fmt.Errorf("send failed: %w", err)
