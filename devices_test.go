@@ -161,6 +161,22 @@ func TestLookupUnknownManufacturer(t *testing.T) {
 	}
 }
 
+func TestRecordPacketIgnoresReservedAddresses(t *testing.T) {
+	reg := NewDeviceRegistry()
+	ts := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	for _, src := range []uint8{254, 255} {
+		isNew := reg.RecordPacket(src, ts, 8)
+		if isNew {
+			t.Errorf("src=%d: expected false, got true", src)
+		}
+	}
+
+	if snap := reg.Snapshot(); len(snap) != 0 {
+		t.Errorf("expected 0 devices, got %d", len(snap))
+	}
+}
+
 func TestRecordPacketNewSource(t *testing.T) {
 	reg := NewDeviceRegistry()
 	ts := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)

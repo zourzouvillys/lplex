@@ -60,7 +60,13 @@ func NewDeviceRegistry() *DeviceRegistry {
 
 // RecordPacket updates per-source packet statistics.
 // Returns true if this is a previously unseen source address.
+// Source 254 (Cannot Claim Address) and 255 (broadcast) are ignored
+// since they are not real devices.
 func (r *DeviceRegistry) RecordPacket(source uint8, ts time.Time, dataLen int) bool {
+	if source >= 254 {
+		return false
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
