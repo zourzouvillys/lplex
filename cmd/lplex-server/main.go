@@ -59,6 +59,8 @@ func main() {
 	virtualDeviceEnabled := flag.Bool("virtual-device", false, "Enable a virtual NMEA 2000 device for address claiming")
 	virtualDeviceName := flag.String("virtual-device-name", "", "64-bit hex ISO NAME for the virtual device (required when -virtual-device is set)")
 	virtualDeviceModelID := flag.String("virtual-device-model-id", "lplex-server", "Product info model ID for the virtual device")
+	claimHeartbeatStr := flag.String("virtual-device-claim-heartbeat", "60s", "Interval for re-broadcasting address claims (PGN 60928)")
+	productInfoHeartbeatStr := flag.String("virtual-device-product-info-heartbeat", "5m", "Interval for re-broadcasting product info (PGN 126996)")
 	busSilenceTimeout := flag.String("bus-silence-timeout", "", "Alert when no CAN frames received for this duration (ISO 8601, e.g. PT30S)")
 	configFile := flag.String("config", "", "Path to HOCON config file (default: ./lplex-server.conf, /etc/lplex/lplex-server.conf)")
 	flag.Parse()
@@ -125,13 +127,26 @@ func main() {
 		logger.Info("virtual device configured", "name", *virtualDeviceName, "model_id", *virtualDeviceModelID)
 	}
 
+	claimHeartbeat, err := time.ParseDuration(*claimHeartbeatStr)
+	if err != nil {
+		logger.Error("invalid virtual-device-claim-heartbeat", "value", *claimHeartbeatStr, "error", err)
+		os.Exit(1)
+	}
+	productInfoHeartbeat, err := time.ParseDuration(*productInfoHeartbeatStr)
+	if err != nil {
+		logger.Error("invalid virtual-device-product-info-heartbeat", "value", *productInfoHeartbeatStr, "error", err)
+		os.Exit(1)
+	}
+
 	broker := lplex.NewBroker(lplex.BrokerConfig{
-		RingSize:          65536,
-		MaxBufferDuration: bufDuration,
-		JournalDir:        *journalDir,
-		Logger:            logger,
-		DeviceIdleTimeout: devIdleTimeout,
-		VirtualDevices:    virtualDevices,
+		RingSize:             65536,
+		MaxBufferDuration:    bufDuration,
+		JournalDir:           *journalDir,
+		Logger:               logger,
+		DeviceIdleTimeout:    devIdleTimeout,
+		VirtualDevices:       virtualDevices,
+		ClaimHeartbeat:       claimHeartbeat,
+		ProductInfoHeartbeat: productInfoHeartbeat,
 	})
 
 	sendPolicy, err := parseSendPolicy(*sendEnabled, *sendRulesStr)

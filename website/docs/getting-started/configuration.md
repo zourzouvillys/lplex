@@ -116,6 +116,28 @@ journal {
   }
 }
 
+virtual-device {
+  # Claims a source address on the CAN bus so that frames sent via
+  # /send and /query come from a legitimate NMEA 2000 participant.
+  # Without this, some devices ignore frames from the unclaimed address 254.
+  # Source address is auto-selected (highest free, counting down from 252).
+  enabled = true
+
+  # 64-bit hex ISO NAME (required). Lower values win address conflicts.
+  name = "00e0170001000004"
+
+  # Product info model ID (default: lplex-server)
+  model-id = "lplex-server"
+
+  # How often to re-broadcast address claim (PGN 60928) on the bus.
+  # Keeps the bus aware we're alive and re-asserts address ownership.
+  claim-heartbeat = "60s"
+
+  # How often to re-broadcast product info (PGN 126996).
+  # Longer interval since it's a 134-byte fast-packet.
+  product-info-heartbeat = "5m"
+}
+
 replication {
   # Cloud server gRPC address (empty = disabled)
   target = "cloud.example.com:9443"
@@ -161,6 +183,11 @@ replication {
 | `-journal-retention-overflow-policy` | `journal.retention.overflow-policy` | `delete-unarchived` | Overflow behavior |
 | `-journal-archive-command` | `journal.archive.command` | (empty) | Archive script path |
 | `-journal-archive-trigger` | `journal.archive.trigger` | `on-rotate` | Archive trigger |
+| `-virtual-device` | `virtual-device.enabled` | `false` | Enable virtual NMEA 2000 device for address claiming |
+| `-virtual-device-name` | `virtual-device.name` | (empty) | 64-bit hex ISO NAME (required when enabled) |
+| `-virtual-device-model-id` | `virtual-device.model-id` | `lplex-server` | Product info model ID |
+| `-virtual-device-claim-heartbeat` | `virtual-device.claim-heartbeat` | `60s` | Address claim re-broadcast interval |
+| `-virtual-device-product-info-heartbeat` | `virtual-device.product-info-heartbeat` | `5m` | Product info re-broadcast interval |
 | `-replication-target` | `replication.target` | (empty) | Cloud gRPC address |
 | `-replication-instance-id` | `replication.instance-id` | (empty) | Instance ID |
 | `-replication-tls-cert` | `replication.tls.cert` | (empty) | Client TLS cert |

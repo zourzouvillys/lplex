@@ -55,6 +55,8 @@ send {
 #   model-id = "lplex-server"   # product info model ID (default: lplex-server)
 #   # software-version defaults to build version
 #   # model-serial defaults to hostname
+#   claim-heartbeat = "60s"          # address claim re-broadcast interval (default: 60s)
+#   product-info-heartbeat = "5m"    # product info re-broadcast interval (default: 5m)
 # }
 
 # Alert when no CAN frames received for this duration (ISO 8601).

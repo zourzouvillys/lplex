@@ -61,6 +61,17 @@ type VirtualDevice struct {
 	readyAt time.Time // when the 250ms holdoff expires after sending a claim
 }
 
+const (
+	// DefaultClaimHeartbeat is how often held virtual devices re-broadcast
+	// their address claim (PGN 60928).
+	DefaultClaimHeartbeat = 60 * time.Second
+
+	// DefaultProductInfoHeartbeat is how often held virtual devices
+	// re-broadcast product info (PGN 126996). Longer interval since it's a
+	// 134-byte fast-packet.
+	DefaultProductInfoHeartbeat = 5 * time.Minute
+)
+
 // VirtualDeviceManager manages a set of virtual NMEA 2000 devices that claim
 // addresses on the CAN bus, making lplex-server a legitimate bus participant.
 //
@@ -78,15 +89,34 @@ type VirtualDeviceManager struct {
 
 	// registry is used to find free addresses and check for conflicts.
 	registry *DeviceRegistry
+
+	// Configurable heartbeat intervals.
+	claimInterval       time.Duration
+	productInfoInterval time.Duration
+
+	// Heartbeat tracking. Only accessed from Heartbeat() which is called
+	// from the broker's single goroutine, so no synchronization needed.
+	lastClaimAt       time.Time
+	lastProductInfoAt time.Time
 }
 
 // NewVirtualDeviceManager creates a new manager. txFunc is called to send
 // frames to the CAN bus. registry is consulted for address selection.
-func NewVirtualDeviceManager(txFunc func(TxRequest), registry *DeviceRegistry, logger *slog.Logger) *VirtualDeviceManager {
+// claimInterval and productInfoInterval control heartbeat frequency;
+// zero values use DefaultClaimHeartbeat and DefaultProductInfoHeartbeat.
+func NewVirtualDeviceManager(txFunc func(TxRequest), registry *DeviceRegistry, logger *slog.Logger, claimInterval, productInfoInterval time.Duration) *VirtualDeviceManager {
+	if claimInterval <= 0 {
+		claimInterval = DefaultClaimHeartbeat
+	}
+	if productInfoInterval <= 0 {
+		productInfoInterval = DefaultProductInfoHeartbeat
+	}
 	return &VirtualDeviceManager{
-		txFunc:   txFunc,
-		registry: registry,
-		logger:   logger,
+		txFunc:              txFunc,
+		registry:            registry,
+		logger:              logger,
+		claimInterval:       claimInterval,
+		productInfoInterval: productInfoInterval,
 	}
 }
 
@@ -103,11 +133,51 @@ func (m *VirtualDeviceManager) Add(cfg VirtualDeviceConfig) {
 func (m *VirtualDeviceManager) StartAfterDiscovery(delay time.Duration) {
 	time.Sleep(delay)
 
+	now := time.Now()
+	m.lastClaimAt = now
+	m.lastProductInfoAt = now
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for _, dev := range m.devices {
 		m.claimForDevice(dev)
+	}
+}
+
+// Heartbeat re-broadcasts address claims and product info for all held virtual
+// devices at their respective intervals. Called from the broker's ticker
+// goroutine (single-threaded, no concurrent calls).
+func (m *VirtualDeviceManager) Heartbeat() {
+	now := time.Now()
+
+	sendClaims := now.Sub(m.lastClaimAt) >= m.claimInterval
+	sendProductInfo := now.Sub(m.lastProductInfoAt) >= m.productInfoInterval
+
+	if !sendClaims && !sendProductInfo {
+		return
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, dev := range m.devices {
+		if dev.state != ClaimHeld {
+			continue
+		}
+		if sendClaims {
+			m.sendAddressClaim(dev, dev.source)
+		}
+		if sendProductInfo {
+			m.sendProductInfo(dev)
+		}
+	}
+
+	if sendClaims {
+		m.lastClaimAt = now
+	}
+	if sendProductInfo {
+		m.lastProductInfoAt = now
 	}
 }
 
@@ -242,13 +312,13 @@ func (m *VirtualDeviceManager) HandleISORequest(dst uint8, requestedPGN uint32, 
 		case 60928:
 			m.sendAddressClaim(dev, dev.source)
 		case 126996:
-			m.sendProductInfo(dev, requesterSrc)
+			m.sendProductInfo(dev)
 		}
 	}
 }
 
-// sendProductInfo sends PGN 126996 Product Information as a response.
-func (m *VirtualDeviceManager) sendProductInfo(dev *VirtualDevice, dst uint8) {
+// sendProductInfo broadcasts PGN 126996 Product Information for a virtual device.
+func (m *VirtualDeviceManager) sendProductInfo(dev *VirtualDevice) {
 	info := dev.cfg.ProductInfo
 	data := make([]byte, 134)
 	// bytes 0-1: NMEA 2000 version (2.0 = 0x0834)

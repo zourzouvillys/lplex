@@ -289,6 +289,14 @@ type BrokerConfig struct {
 	// VirtualDevices configures virtual NMEA 2000 devices that claim
 	// addresses on the bus. Nil or empty means disabled.
 	VirtualDevices []VirtualDeviceConfig
+
+	// ClaimHeartbeat is how often virtual devices re-broadcast their address
+	// claim (PGN 60928). Zero uses DefaultClaimHeartbeat (60s).
+	ClaimHeartbeat time.Duration
+
+	// ProductInfoHeartbeat is how often virtual devices re-broadcast product
+	// info (PGN 126996). Zero uses DefaultProductInfoHeartbeat (5m).
+	ProductInfoHeartbeat time.Duration
 }
 
 // NewBroker creates a new broker with the given config.
@@ -341,7 +349,7 @@ func NewBroker(cfg BrokerConfig) *Broker {
 	}
 
 	if len(cfg.VirtualDevices) > 0 && !cfg.ReplicaMode {
-		b.virtualDevices = NewVirtualDeviceManager(b.queueTx, b.devices, cfg.Logger)
+		b.virtualDevices = NewVirtualDeviceManager(b.queueTx, b.devices, cfg.Logger, cfg.ClaimHeartbeat, cfg.ProductInfoHeartbeat)
 		for _, vdc := range cfg.VirtualDevices {
 			b.virtualDevices.Add(vdc)
 		}
@@ -381,6 +389,9 @@ func (b *Broker) Run() {
 			b.expireDevices()
 			if !b.replicaMode {
 				b.retryProductInfo()
+			}
+			if b.virtualDevices != nil {
+				b.virtualDevices.Heartbeat()
 			}
 		}
 	}

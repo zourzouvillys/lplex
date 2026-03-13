@@ -27,6 +27,38 @@ If a device restarts and claims a **new source address** while keeping the same 
 
 Devices that haven't sent any frames within the idle timeout (default 5 minutes) are automatically removed. This covers both NAME-bearing devices and stats-only entries. Configure with `-device-idle-timeout` (or HOCON `device.idle-timeout`). Set to `0` to disable.
 
+## Virtual device
+
+When lplex-server sends CAN frames (via `/send` or `/query`), it needs a claimed source address to be a compliant NMEA 2000 participant. Without this, frames are sent from the unclaimed address 254, and some devices will ignore them.
+
+Enable a virtual device to make lplex-server claim an address on the bus:
+
+```bash
+lplex-server -virtual-device -virtual-device-name 00e0170001000004
+```
+
+Or in HOCON:
+
+```hocon
+virtual-device {
+  enabled = true
+  name = "00e0170001000004"
+}
+```
+
+The virtual device:
+
+- **Auto-selects** a source address (starting at 252, counting down to avoid real hardware)
+- **Claims** the address via PGN 60928, with a 250ms holdoff per the NMEA 2000 spec
+- **Resolves conflicts** automatically (lower NAME wins; if we lose, we pick a new address)
+- **Responds** to ISO requests for address claim (PGN 60928) and product info (PGN 126996)
+- **Heartbeats** periodically, re-broadcasting address claims (default every 60s) and product info (default every 5m) to keep the bus aware of our presence
+- **Appears** in the device table like any other device, with full product info
+
+The NAME must be a 64-bit hex value. Lower values have higher priority in address conflicts. See [ISO 11783-5](https://en.wikipedia.org/wiki/ISO_11783) for the NAME field encoding.
+
+Heartbeat intervals are configurable via `-virtual-device-claim-heartbeat` (default `60s`) and `-virtual-device-product-info-heartbeat` (default `5m`). See [Configuration](../getting-started/configuration.md) for all options.
+
 ## Device table fields
 
 | Field | Source | Description |

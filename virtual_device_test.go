@@ -21,7 +21,7 @@ func newTestVDM() *testVDM {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	t.mgr = NewVirtualDeviceManager(func(req TxRequest) {
 		t.txLog = append(t.txLog, req)
-	}, t.registry, logger)
+	}, t.registry, logger, 0, 0)
 	return t
 }
 
@@ -319,6 +319,97 @@ func TestVirtualDeviceNotReadyDuringHoldoff(t *testing.T) {
 	// Device is in ClaimInProgress, not ready.
 	if tv.mgr.Ready() {
 		t.Error("should not be ready during claim in-progress")
+	}
+}
+
+func TestVirtualDeviceHeartbeat(t *testing.T) {
+	tv := newTestVDM()
+	tv.mgr.Add(VirtualDeviceConfig{
+		NAME:        0x1234,
+		ProductInfo: VirtualProductInfo{ModelID: "hb-test"},
+	})
+	tv.mgr.StartAfterDiscovery(0)
+
+	// Transition to Held via echo.
+	tv.mgr.HandleBusClaim(252, 0x1234)
+
+	txBefore := len(tv.txLog)
+
+	// Heartbeat should be a no-op right after claim (intervals haven't elapsed).
+	tv.mgr.Heartbeat()
+	if len(tv.txLog) != txBefore {
+		t.Errorf("heartbeat too early: got %d txs, want %d", len(tv.txLog), txBefore)
+	}
+
+	// Wind back the claim timer past the 60s threshold.
+	tv.mgr.lastClaimAt = time.Now().Add(-61 * time.Second)
+	tv.mgr.Heartbeat()
+
+	// Should have sent one address claim.
+	if len(tv.txLog) != txBefore+1 {
+		t.Fatalf("expected 1 claim heartbeat tx, got %d new", len(tv.txLog)-txBefore)
+	}
+	if tv.txLog[len(tv.txLog)-1].Header.PGN != 60928 {
+		t.Errorf("expected PGN 60928, got %d", tv.txLog[len(tv.txLog)-1].Header.PGN)
+	}
+
+	// Product info should not have been sent yet (5min interval).
+	txBefore = len(tv.txLog)
+	tv.mgr.lastProductInfoAt = time.Now().Add(-4 * time.Minute) // not expired yet
+	tv.mgr.Heartbeat()
+	if len(tv.txLog) != txBefore {
+		t.Errorf("product info sent too early: got %d txs, want %d", len(tv.txLog), txBefore)
+	}
+
+	// Wind back the product info timer past 5min.
+	tv.mgr.lastProductInfoAt = time.Now().Add(-6 * time.Minute)
+	tv.mgr.lastClaimAt = time.Now() // reset claim so we only get product info
+	tv.mgr.Heartbeat()
+
+	if len(tv.txLog) != txBefore+1 {
+		t.Fatalf("expected 1 product info heartbeat tx, got %d new", len(tv.txLog)-txBefore)
+	}
+	if tv.txLog[len(tv.txLog)-1].Header.PGN != 126996 {
+		t.Errorf("expected PGN 126996, got %d", tv.txLog[len(tv.txLog)-1].Header.PGN)
+	}
+}
+
+func TestVirtualDeviceHeartbeatSkipsNonHeld(t *testing.T) {
+	tv := newTestVDM()
+	tv.mgr.Add(VirtualDeviceConfig{NAME: 0x5678})
+	tv.mgr.StartAfterDiscovery(0)
+
+	// Device is in ClaimInProgress (no echo yet). Heartbeat should not send anything.
+	tv.mgr.lastClaimAt = time.Time{} // force interval to have elapsed
+	txBefore := len(tv.txLog)
+
+	tv.mgr.Heartbeat()
+	if len(tv.txLog) != txBefore {
+		t.Error("heartbeat should skip devices that aren't in ClaimHeld state")
+	}
+}
+
+func TestVirtualDeviceHeartbeatMultiDevice(t *testing.T) {
+	tv := newTestVDM()
+	tv.mgr.Add(VirtualDeviceConfig{NAME: 0xAAAA})
+	tv.mgr.Add(VirtualDeviceConfig{NAME: 0xBBBB})
+	tv.mgr.StartAfterDiscovery(0)
+
+	// Transition both to Held.
+	tv.mgr.HandleBusClaim(252, 0xAAAA)
+	tv.mgr.HandleBusClaim(251, 0xBBBB)
+
+	txBefore := len(tv.txLog)
+
+	// Wind back both timers.
+	tv.mgr.lastClaimAt = time.Time{}
+	tv.mgr.lastProductInfoAt = time.Time{}
+	tv.mgr.Heartbeat()
+
+	// Should send claim + product info for each device = 4 txs.
+	newTxs := len(tv.txLog) - txBefore
+	if newTxs != 4 {
+		t.Fatalf("expected 4 heartbeat txs (2 claims + 2 product infos), got %d", newTxs)
 	}
 }
 
