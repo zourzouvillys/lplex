@@ -49,7 +49,8 @@ PGN definitions live in `pgn/defs/`:
 | `navigation.pgn` | Position, heading, speed, depth, wind reference enums |
 | `engine.pgn` | Engine parameters, battery, charger, fluid level, switch bank |
 | `environment.pgn` | Temperature, humidity, pressure, wind data |
-| `system.pgn` | ISO address claim, product info, heartbeat, proprietary PGNs |
+| `system.pgn` | ISO address claim, product info, heartbeat, proprietary PGNs, NMEA group function |
+| `electrical.pgn` | Load controller, DC voltage/current |
 | `ais.pgn` | AIS position reports, static data, and related PGNs |
 | `alert.pgn` | NMEA 2000 alert PGNs |
 
