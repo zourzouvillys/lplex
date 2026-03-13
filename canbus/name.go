@@ -48,6 +48,50 @@ func DecodeNAME(name uint64) NameFields {
 	}
 }
 
+// EncodeName builds a 64-bit ISO NAME from individual fields.
+// Inverse of DecodeNAME (at the numeric level; manufacturer string is ignored).
+//
+// Fields map to the same bit layout documented on DecodeNAME:
+//
+//	bits  0-20:  UniqueNumber (21 bits)
+//	bits 21-31:  ManufacturerCode (11 bits)
+//	bits 32-34:  DeviceInstance lower 3 bits
+//	bits 35-39:  DeviceInstance upper 5 bits
+//	bits 40-47:  DeviceFunction (8 bits)
+//	bit  48:     reserved (0)
+//	bits 49-55:  DeviceClass (7 bits)
+//	bits 56-59:  SystemInstance (4 bits)
+//	bits 60-62:  IndustryGroup (3 bits)
+//	bit  63:     ArbitraryAddressCapable
+type NameEncodeFields struct {
+	UniqueNumber          uint32
+	ManufacturerCode      uint16
+	DeviceInstance        uint8
+	DeviceFunction        uint8
+	DeviceClass           uint8
+	SystemInstance        uint8
+	IndustryGroup         uint8
+	ArbitraryAddressCapable bool
+}
+
+// EncodeName encodes the fields into a 64-bit ISO NAME.
+func EncodeName(f NameEncodeFields) uint64 {
+	var name uint64
+	name |= uint64(f.UniqueNumber & 0x1FFFFF)
+	name |= uint64(f.ManufacturerCode&0x7FF) << 21
+	name |= uint64(f.DeviceInstance&0x07) << 32 // lower 3 bits
+	name |= uint64(f.DeviceInstance>>3&0x1F) << 35 // upper 5 bits
+	name |= uint64(f.DeviceFunction) << 40
+	// bit 48: reserved (0)
+	name |= uint64(f.DeviceClass&0x7F) << 49
+	name |= uint64(f.SystemInstance&0x0F) << 56
+	name |= uint64(f.IndustryGroup&0x07) << 60
+	if f.ArbitraryAddressCapable {
+		name |= 1 << 63
+	}
+	return name
+}
+
 // LookupManufacturer returns a human-readable manufacturer name for common NMEA 2000 codes.
 func LookupManufacturer(code uint16) string {
 	if name, ok := Manufacturers[code]; ok {

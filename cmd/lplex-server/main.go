@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -55,6 +56,9 @@ func main() {
 	deviceIdleTimeout := flag.String("device-idle-timeout", "5m", "Remove devices not seen for this duration (0 = disabled)")
 	sendEnabled := flag.Bool("send-enabled", false, "Enable the /send and /query HTTP endpoints (default: disabled)")
 	sendRulesStr := flag.String("send-rules", "", "Semicolon-separated send rules (e.g. 'pgn:59904; !pgn:65280-65535')")
+	virtualDeviceEnabled := flag.Bool("virtual-device", false, "Enable a virtual NMEA 2000 device for address claiming")
+	virtualDeviceName := flag.String("virtual-device-name", "", "64-bit hex ISO NAME for the virtual device (required when -virtual-device is set)")
+	virtualDeviceModelID := flag.String("virtual-device-model-id", "lplex-server", "Product info model ID for the virtual device")
 	busSilenceTimeout := flag.String("bus-silence-timeout", "", "Alert when no CAN frames received for this duration (ISO 8601, e.g. PT30S)")
 	configFile := flag.String("config", "", "Path to HOCON config file (default: ./lplex-server.conf, /etc/lplex/lplex-server.conf)")
 	flag.Parse()
@@ -98,12 +102,36 @@ func main() {
 		devIdleTimeout = -1
 	}
 
+	var virtualDevices []lplex.VirtualDeviceConfig
+	if *virtualDeviceEnabled {
+		if *virtualDeviceName == "" {
+			logger.Error("-virtual-device-name is required when -virtual-device is set")
+			os.Exit(1)
+		}
+		name, err := strconv.ParseUint(*virtualDeviceName, 16, 64)
+		if err != nil {
+			logger.Error("invalid virtual-device-name: must be 64-bit hex", "value", *virtualDeviceName, "error", err)
+			os.Exit(1)
+		}
+		hostname, _ := os.Hostname()
+		virtualDevices = append(virtualDevices, lplex.VirtualDeviceConfig{
+			NAME: name,
+			ProductInfo: lplex.VirtualProductInfo{
+				ModelID:         *virtualDeviceModelID,
+				SoftwareVersion: version,
+				ModelSerial:     hostname,
+			},
+		})
+		logger.Info("virtual device configured", "name", *virtualDeviceName, "model_id", *virtualDeviceModelID)
+	}
+
 	broker := lplex.NewBroker(lplex.BrokerConfig{
 		RingSize:          65536,
 		MaxBufferDuration: bufDuration,
 		JournalDir:        *journalDir,
 		Logger:            logger,
 		DeviceIdleTimeout: devIdleTimeout,
+		VirtualDevices:    virtualDevices,
 	})
 
 	sendPolicy, err := parseSendPolicy(*sendEnabled, *sendRulesStr)

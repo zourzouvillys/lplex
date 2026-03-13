@@ -320,6 +320,23 @@ func (s *Server) handleAck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// overrideSource replaces the outgoing source address with the first claimed
+// virtual device address, if virtual devices are configured. Returns false
+// (and writes an HTTP error) if virtual devices exist but none are ready yet.
+func (s *Server) overrideSource(w http.ResponseWriter, src *uint8) bool {
+	vdm := s.broker.VirtualDevices()
+	if vdm == nil {
+		return true
+	}
+	addr, ok := vdm.ClaimedSource()
+	if !ok || !vdm.Ready() {
+		http.Error(w, "virtual device not ready (claiming address)", http.StatusServiceUnavailable)
+		return false
+	}
+	*src = addr
+	return true
+}
+
 // checkSendPolicy validates that the send policy allows a frame with the given
 // PGN and destination address. Returns true if allowed, false if the request
 // was rejected (with an appropriate HTTP error written).
@@ -386,19 +403,23 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	src := req.Src
+	if !s.overrideSource(w, &src) {
+		return
+	}
+
 	header := CANHeader{
 		Priority:    req.Prio,
 		PGN:         req.PGN,
-		Source:      req.Src,
+		Source:      src,
 		Destination: req.Dst,
 	}
 
-	select {
-	case s.broker.txFrames <- TxRequest{Header: header, Data: data}:
-		w.WriteHeader(http.StatusAccepted)
-	default:
+	if !s.broker.QueueTx(TxRequest{Header: header, Data: data}) {
 		http.Error(w, "tx queue full", http.StatusServiceUnavailable)
+		return
 	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // POST /query
@@ -433,6 +454,12 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		timeout = d
+	}
+
+	// Check virtual device holdoff before sending.
+	if vdm := s.broker.VirtualDevices(); vdm != nil && !vdm.Ready() {
+		http.Error(w, "virtual device not ready (claiming address)", http.StatusServiceUnavailable)
+		return
 	}
 
 	// Subscribe to matching frames before sending the request.

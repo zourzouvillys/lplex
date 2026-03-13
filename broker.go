@@ -1,6 +1,7 @@
 package lplex
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -18,6 +19,7 @@ type RxFrame struct {
 	Header    CANHeader
 	Data      []byte
 	Seq       uint64 // assigned by broker in handleFrame; zero when fed by external code
+	Local     bool   // true if this frame was generated locally (TX echo), not received from the bus
 }
 
 // ringEntry is a pre-serialized frame stored in the ring buffer.
@@ -249,6 +251,9 @@ type Broker struct {
 	replicaMode       bool          // when true, honor frame.Seq instead of auto-incrementing
 	deviceIdleTimeout time.Duration // 0 = disabled
 
+	// virtual NMEA 2000 devices (nil = disabled)
+	virtualDevices *VirtualDeviceManager
+
 	// metrics counters (lock-free)
 	frameCount    atomic.Uint64
 	lastFrameNano atomic.Int64 // UnixNano of most recent frame
@@ -280,6 +285,10 @@ type BrokerConfig struct {
 	// DeviceIdleTimeout removes devices that haven't been seen for this
 	// duration. Zero means use the default (5 minutes). Use -1 to disable.
 	DeviceIdleTimeout time.Duration
+
+	// VirtualDevices configures virtual NMEA 2000 devices that claim
+	// addresses on the bus. Nil or empty means disabled.
+	VirtualDevices []VirtualDeviceConfig
 }
 
 // NewBroker creates a new broker with the given config.
@@ -311,7 +320,7 @@ func NewBroker(cfg BrokerConfig) *Broker {
 		deviceIdleTimeout = 0 // disabled
 	}
 
-	return &Broker{
+	b := &Broker{
 		rxFrames:          make(chan RxFrame, 256),
 		txFrames:          make(chan TxRequest, 64),
 		devices:           NewDeviceRegistry(),
@@ -330,6 +339,15 @@ func NewBroker(cfg BrokerConfig) *Broker {
 		replicaMode:       cfg.ReplicaMode,
 		deviceIdleTimeout: deviceIdleTimeout,
 	}
+
+	if len(cfg.VirtualDevices) > 0 && !cfg.ReplicaMode {
+		b.virtualDevices = NewVirtualDeviceManager(b.queueTx, b.devices, cfg.Logger)
+		for _, vdc := range cfg.VirtualDevices {
+			b.virtualDevices.Add(vdc)
+		}
+	}
+
+	return b
 }
 
 // Run is the broker's main loop. Call in its own goroutine.
@@ -340,6 +358,11 @@ func (b *Broker) Run() {
 	if !b.replicaMode {
 		// Broadcast ISO Request for Address Claim so devices already on the bus identify themselves.
 		b.sendISORequest(0xFF, 60928)
+	}
+
+	// Start virtual device address claims after discovery has had time to populate.
+	if b.virtualDevices != nil {
+		go b.virtualDevices.StartAfterDiscovery(2 * time.Second)
 	}
 
 	ticker := time.NewTicker(10 * time.Second)
@@ -363,52 +386,113 @@ func (b *Broker) Run() {
 	}
 }
 
+// injectLocal feeds a frame back into the broker's rx channel as a Local
+// frame, so it appears in the ring buffer, journal, and device table. Safe
+// to call even after rxFrames is closed (recovers the panic).
+func (b *Broker) injectLocal(req TxRequest) {
+	defer func() { recover() }() //nolint:errcheck // rxFrames may be closed during shutdown
+	select {
+	case b.rxFrames <- RxFrame{
+		Timestamp: time.Now(),
+		Header:    req.Header,
+		Data:      append([]byte(nil), req.Data...),
+		Local:     true,
+	}:
+	default:
+	}
+}
+
+// queueTx sends a frame to the CAN bus and injects it into the broker as a
+// Local frame so it's recorded in the ring buffer, journal, and device table.
+func (b *Broker) queueTx(req TxRequest) {
+	select {
+	case b.txFrames <- req:
+	default:
+		return // if CAN TX queue is full, don't record either
+	}
+	b.injectLocal(req)
+}
+
+// QueueTx sends a frame to the CAN bus and records it locally. Returns false
+// if the TX queue is full.
+func (b *Broker) QueueTx(req TxRequest) bool {
+	select {
+	case b.txFrames <- req:
+	default:
+		return false
+	}
+	b.injectLocal(req)
+	return true
+}
+
+// isoRequestSource returns the source address to use for ISO requests.
+// Uses the first claimed virtual device address if available, otherwise 254.
+func (b *Broker) isoRequestSource() uint8 {
+	if b.virtualDevices != nil {
+		if addr, ok := b.virtualDevices.ClaimedSource(); ok {
+			return addr
+		}
+	}
+	return 254
+}
+
 // sendISORequest sends an ISO Request (PGN 59904) asking the target to transmit
 // the specified PGN. dst=0xFF for broadcast, or a specific source address.
+// ISO requests are internal housekeeping and are NOT locally injected; they'll
+// appear in the ring buffer when the CAN echo comes back.
 func (b *Broker) sendISORequest(dst uint8, pgn uint32) {
-	header := CANHeader{
-		Priority:    6,
-		PGN:         59904,
-		Source:      254, // null/tool address
-		Destination: dst,
-	}
-	data := []byte{byte(pgn), byte(pgn >> 8), byte(pgn >> 16)}
 	select {
-	case b.txFrames <- TxRequest{Header: header, Data: data}:
+	case b.txFrames <- TxRequest{
+		Header: CANHeader{
+			Priority:    6,
+			PGN:         59904,
+			Source:      b.isoRequestSource(),
+			Destination: dst,
+		},
+		Data: []byte{byte(pgn), byte(pgn >> 8), byte(pgn >> 16)},
+	}:
 	default:
-		// tx queue full, don't block the broker loop
 	}
 }
 
 // SendISORequest sends an ISO Request (PGN 59904) to the given destination,
 // asking it to transmit the specified PGN. Returns an error if the tx queue is full.
+// The request is locally injected so callers can observe it in the ring buffer
+// without waiting for the CAN echo.
 func (b *Broker) SendISORequest(dst uint8, pgn uint32) error {
-	header := CANHeader{
-		Priority:    6,
-		PGN:         59904,
-		Source:      254,
-		Destination: dst,
-	}
-	data := []byte{byte(pgn), byte(pgn >> 8), byte(pgn >> 16)}
-	select {
-	case b.txFrames <- TxRequest{Header: header, Data: data}:
-		return nil
-	default:
+	if !b.QueueTx(TxRequest{
+		Header: CANHeader{
+			Priority:    6,
+			PGN:         59904,
+			Source:      b.isoRequestSource(),
+			Destination: dst,
+		},
+		Data: []byte{byte(pgn), byte(pgn >> 8), byte(pgn >> 16)},
+	}) {
 		return fmt.Errorf("tx queue full")
 	}
+	return nil
 }
 
 func (b *Broker) handleFrame(frame RxFrame) {
 	src := frame.Header.Source
 
-	// Track per-source packet stats for every frame.
+	// Track per-source packet stats for all frames (local and wire).
 	newSource := b.devices.RecordPacket(src, frame.Timestamp, len(frame.Data))
 
-	// Device discovery: always decode address claims and product info for
-	// the device registry, but only send ISO requests when we have a real
-	// CAN bus (not in replica mode).
+	// Device discovery: decode address claims and product info for the
+	// device registry, send ISO requests for wire frames only (local frames
+	// are ours, we don't want to talk to ourselves).
 	switch frame.Header.PGN {
 	case 60928:
+		// Virtual device state machine: echo detection and conflict
+		// resolution. Only run for wire frames (CAN echoes), not our
+		// local injections, because the state machine needs to see what
+		// the bus actually transmitted.
+		if b.virtualDevices != nil && !frame.Local && len(frame.Data) >= 8 {
+			name := binary.LittleEndian.Uint64(frame.Data[:8])
+			b.virtualDevices.HandleBusClaim(src, name)
+		}
 		if dev, evictedSrc, evicted := b.devices.HandleAddressClaim(src, frame.Data); dev != nil {
 			b.logger.Info("device discovered",
 				"src", dev.Source,
@@ -423,9 +507,23 @@ func (b *Broker) handleFrame(frame RxFrame) {
 				b.fanOutDeviceRemoved(evictedSrc)
 			}
 			b.fanOutDevice(dev)
-			if !b.replicaMode {
+			if frame.Local && b.virtualDevices != nil {
+				// Seed product info immediately so our virtual device
+				// shows up complete in /devices without waiting for an
+				// ISO request from another device on the bus.
+				if prodData := b.virtualDevices.ProductInfoPayload(src); prodData != nil {
+					b.devices.HandleProductInfo(src, prodData)
+				}
+			} else if !b.replicaMode {
 				b.sendISORequest(src, 126996)
 			}
+		}
+	case 59904:
+		// Respond to ISO requests targeting our virtual devices. Skip
+		// local frames to avoid responding to our own ISO request echoes.
+		if b.virtualDevices != nil && !frame.Local && len(frame.Data) >= 3 {
+			reqPGN := uint32(frame.Data[0]) | uint32(frame.Data[1])<<8 | uint32(frame.Data[2])<<16
+			b.virtualDevices.HandleISORequest(frame.Header.Destination, reqPGN, src)
 		}
 	case 126996:
 		if dev := b.devices.HandleProductInfo(src, frame.Data); dev != nil {
@@ -438,7 +536,9 @@ func (b *Broker) handleFrame(frame RxFrame) {
 			b.fanOutDevice(dev)
 		}
 	default:
-		if newSource && !b.replicaMode {
+		// Discover new real devices. Skip local frames (don't send ISO
+		// requests to ourselves).
+		if newSource && !b.replicaMode && !frame.Local {
 			b.sendISORequest(src, 60928)
 		}
 	}
@@ -506,8 +606,11 @@ func (b *Broker) handleFrame(frame RxFrame) {
 	b.frameCount.Add(1)
 	b.lastFrameNano.Store(frame.Timestamp.UnixNano())
 
-	// Track last-seen value per (source, PGN).
-	b.values.Record(frame.Header.Source, frame.Header.PGN, frame.Timestamp, frame.Data, seq)
+	// Track last-seen value per (source, PGN). Skip local frames since the
+	// values store represents received bus state, not our own output.
+	if !frame.Local {
+		b.values.Record(frame.Header.Source, frame.Header.PGN, frame.Timestamp, frame.Data, seq)
+	}
 
 	// Fan out to connected clients (filters checked per-session)
 	b.fanOut(frame.Header, jsonBytes)
@@ -820,6 +923,11 @@ func (b *Broker) Devices() *DeviceRegistry {
 // Values returns the broker's last-values store.
 func (b *Broker) Values() *ValueStore {
 	return b.values
+}
+
+// VirtualDevices returns the broker's virtual device manager, or nil if disabled.
+func (b *Broker) VirtualDevices() *VirtualDeviceManager {
+	return b.virtualDevices
 }
 
 // BrokerStats is a point-in-time snapshot of broker metrics.

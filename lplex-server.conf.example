@@ -45,6 +45,18 @@ send {
   # ]
 }
 
+# Virtual NMEA 2000 device: claims a source address on the CAN bus so that
+# frames sent via /send and /query come from a legitimate bus participant.
+# Without this, some devices may ignore frames from the unclaimed address 254.
+# The source address is auto-selected (highest free address, counting down from 252).
+# virtual-device {
+#   enabled = true
+#   name = "00e0170001000004"   # 64-bit hex ISO NAME (required)
+#   model-id = "lplex-server"   # product info model ID (default: lplex-server)
+#   # software-version defaults to build version
+#   # model-serial defaults to hostname
+# }
+
 # Alert when no CAN frames received for this duration (ISO 8601).
 # Detects CAN bus disconnection or power issues.
 # bus-silence-timeout = PT30S
