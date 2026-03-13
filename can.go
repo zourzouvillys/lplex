@@ -76,6 +76,11 @@ func CANReader(ctx context.Context, iface string, rxFrames chan<- RxFrame, logge
 	}
 }
 
+// txPaceInterval is the minimum time between transmitted CAN frames.
+// Prevents flooding the bus when multiple requests queue up (e.g. product
+// info requests for every device at startup).
+const txPaceInterval = 50 * time.Millisecond
+
 // CANWriter reads from the broker's txFrames channel and writes to SocketCAN.
 // Handles fast-packet fragmentation for payloads > 8 bytes.
 func CANWriter(ctx context.Context, iface string, txFrames <-chan TxRequest, logger *slog.Logger) error {
@@ -87,6 +92,7 @@ func CANWriter(ctx context.Context, iface string, txFrames <-chan TxRequest, log
 
 	transmitter := socketcan.NewTransmitter(conn)
 	var seqCounter uint8
+	var lastTx time.Time
 
 	logger.Info("CAN writer started", "interface", iface)
 
@@ -98,6 +104,11 @@ func CANWriter(ctx context.Context, iface string, txFrames <-chan TxRequest, log
 		case req, ok := <-txFrames:
 			if !ok {
 				return nil
+			}
+
+			// Pace outgoing frames so we don't flood the bus.
+			if since := time.Since(lastTx); since < txPaceInterval {
+				time.Sleep(txPaceInterval - since)
 			}
 
 			canID := BuildCANID(req.Header)
@@ -133,6 +144,7 @@ func CANWriter(ctx context.Context, iface string, txFrames <-chan TxRequest, log
 					logger.Error("CAN TX failed", "error", err, "pgn", req.Header.PGN)
 				}
 			}
+			lastTx = time.Now()
 		}
 	}
 }

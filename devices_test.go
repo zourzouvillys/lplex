@@ -177,6 +177,34 @@ func TestRecordPacketIgnoresReservedAddresses(t *testing.T) {
 	}
 }
 
+func TestSourcesMissingProductInfo(t *testing.T) {
+	reg := NewDeviceRegistry()
+	ts := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	// Device with address claim but no product info.
+	data1 := make([]byte, 8)
+	binary.LittleEndian.PutUint64(data1, uint64(229)<<21|1)
+	reg.HandleAddressClaim(10, data1)
+	reg.RecordPacket(10, ts, 8)
+
+	// Device with address claim AND product info.
+	data2 := make([]byte, 8)
+	binary.LittleEndian.PutUint64(data2, uint64(229)<<21|2)
+	reg.HandleAddressClaim(20, data2)
+	reg.RecordPacket(20, ts, 8)
+	prodData := make([]byte, 134)
+	copy(prodData[4:36], "SomeModel")
+	reg.HandleProductInfo(20, prodData)
+
+	// Stats-only device (no NAME, no product info) should not be included.
+	reg.RecordPacket(30, ts, 8)
+
+	missing := reg.SourcesMissingProductInfo()
+	if len(missing) != 1 || missing[0] != 10 {
+		t.Errorf("expected [10], got %v", missing)
+	}
+}
+
 func TestRecordPacketNewSource(t *testing.T) {
 	reg := NewDeviceRegistry()
 	ts := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)

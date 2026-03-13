@@ -197,6 +197,21 @@ func (r *DeviceRegistry) ExpireIdle(cutoff time.Time) []uint8 {
 	return evicted
 }
 
+// SourcesMissingProductInfo returns source addresses of devices that have a
+// NAME (address claim received) but no product info (PGN 126996) yet.
+func (r *DeviceRegistry) SourcesMissingProductInfo() []uint8 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var srcs []uint8
+	for _, dev := range r.devices {
+		if dev.NAME != 0 && dev.ModelID == "" && dev.ProductCode == 0 {
+			srcs = append(srcs, dev.Source)
+		}
+	}
+	return srcs
+}
+
 // Get returns a snapshot of the device at the given source address, or nil.
 func (r *DeviceRegistry) Get(source uint8) *Device {
 	r.mu.RLock()

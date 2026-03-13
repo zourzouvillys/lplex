@@ -356,6 +356,9 @@ func (b *Broker) Run() {
 		case <-ticker.C:
 			b.expireSessions()
 			b.expireDevices()
+			if !b.replicaMode {
+				b.retryProductInfo()
+			}
 		}
 	}
 }
@@ -702,6 +705,15 @@ func (b *Broker) expireDevices() {
 		b.logger.Info("expired idle device", "src", src)
 		b.values.RemoveSource(src)
 		b.fanOutDeviceRemoved(src)
+	}
+}
+
+// retryProductInfo re-requests PGN 126996 for any device that has an
+// address claim but no product info yet. Handles the case where the
+// initial burst of requests on startup gets lost on the CAN bus.
+func (b *Broker) retryProductInfo() {
+	for _, src := range b.devices.SourcesMissingProductInfo() {
+		b.sendISORequest(src, 126996)
 	}
 }
 
